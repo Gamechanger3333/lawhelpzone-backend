@@ -16,13 +16,13 @@ import searchRoutes from "./routes/searchRoutes.js"
 import profileRoutes from "./routes/profileRoutes.js";
 import connectDB from "./config/database.js"
 
-
+// ── dotenv.config() moved to top so env vars are available everywhere ──
+dotenv.config();
 
 // connect database
 connectDB();
 
-// ── dotenv.config() moved to top so env vars are available everywhere ──
-dotenv.config();
+
 
 const app = express()
 
@@ -211,7 +211,7 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT,"0.0.0.0", () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📡 Socket.io enabled`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
