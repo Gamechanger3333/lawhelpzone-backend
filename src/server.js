@@ -12,28 +12,36 @@ import { fileURLToPath } from "url";
 import lawyerRoutes from "./routes/lawyerRoutes.js"
 import callRoutes from "./routes/callRoutes.js"
 import searchRoutes from "./routes/searchRoutes.js"
-
 import profileRoutes from "./routes/profileRoutes.js";
 import connectDB from "./config/database.js"
 
-// ── dotenv.config() moved to top so env vars are available everywhere ──
 dotenv.config();
-
-// connect database
 connectDB();
 
+const app = express();
 
+// ==================== CORS — must be first ====================
+const allowedOrigins = [
+  "http://localhost:3000",
+  "https://lawhelpzone-frontend-4fq6.vercel.app",
+];
 
-const app = express()
-// ✅ CORS must be FIRST — before helmet and everything else
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://lawhelpzone-frontend-4fq6.vercel.app",
-  ],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow all vercel preview deployments
+    if (origin.endsWith(".vercel.app")) return callback(null, true);
+    callback(new Error("Not allowed by CORS"));
+  },
   credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
 }));
 
+// Handle preflight for all routes
+app.options("*", cors());
 
 // ── Import Socket.io ──────────────────────────────────────────────────────────
 import { initializeSocket } from "./utils/socket.js";
@@ -45,7 +53,6 @@ import { apiLimiter } from "./middleware/rateLimiter.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-
 const uploadsDir = path.join(__dirname, "../uploads");
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -56,25 +63,28 @@ const httpServer = createServer(app);
 
 // ==================== MIDDLEWARE ====================
 
-// Security middleware
+// Security middleware (after CORS)
 securityMiddleware(app);
-
 
 // Body parsers
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Serve static files — use the resolved absolute path for reliability
-app.use('/uploads', express.static(uploadsDir));
+// ✅ Serve uploaded files with cross-origin headers so images load on Vercel
+app.use('/uploads', (req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  res.header("Cross-Origin-Embedder-Policy", "unsafe-none");
+  next();
+}, express.static(uploadsDir));
 
 // Rate limiting
 app.use('/api', apiLimiter);
 
-// Initialize Socket.io and attach to app so controllers can access via req.app.get("io")
+// Initialize Socket.io
 const io = initializeSocket(httpServer);
 app.set("io", io);
-
 
 // ==================== ROUTES ====================
 
@@ -86,10 +96,9 @@ import dashboardRoutes    from "./routes/dashboardRoutes.js"
 import adminRoutes        from "./routes/adminroute.js"
 import settingsRoutes     from "./routes/settingsRoutes.js";
 
-app.use("/api/auth",     authRoutes);
-app.use("/api/messages",  chatRoutes);
-app.use("/api",          profileRoutes);
-
+app.use("/api/auth",          authRoutes);
+app.use("/api/messages",      chatRoutes);
+app.use("/api",               profileRoutes);
 app.use("/api/cases",         caseRoutes);
 app.use("/api/chat",          chatRoutes);
 app.use("/api/notifications", notificationRoutes);
@@ -105,11 +114,8 @@ app.use("/api/settings",      settingsRoutes);
 import multer from "multer";
 
 const storage = multer.diskStorage({
-  // ── Use the pre-resolved absolute path so uploads always land in the right place
-  //    regardless of the working directory when the process was started
   destination: (req, file, cb) => cb(null, uploadsDir),
   filename:    (req, file, cb) => {
-    // Sanitise the original filename to strip characters that can break paths
     const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
     cb(null, `${Date.now()}-${safeName}`);
   },
@@ -123,12 +129,14 @@ const upload = multer({
 app.post("/api/upload", protect, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
-  const url = `${process.env.BACKEND_URL || "http://localhost:5000"}/uploads/${req.file.filename}`;
+  // ✅ Use BACKEND_URL env var so uploaded file URLs point to Railway, not localhost
+  const baseUrl = process.env.BACKEND_URL || "https://lawhelpzone-backend-production.up.railway.app";
+  const url = `${baseUrl}/uploads/${req.file.filename}`;
 
   res.json({
     success:  true,
     url,
-    fileUrl:  url,           // alias so both field names work on the frontend
+    fileUrl:  url,
     fileName: req.file.originalname,
     fileSize: req.file.size,
   });
@@ -140,16 +148,6 @@ app.get("/", (req, res) => {
   res.json({
     message: "LawHelpZone API is running ✅",
     version: "2.0.0",
-    features: [
-      "JWT Authentication with Refresh Tokens",
-      "Email Verification",
-      "Password Reset",
-      "Real-time Chat (Socket.io)",
-      "Real-time Notifications",
-      "File Upload Support",
-      "Rate Limiting",
-      "Security Headers",
-    ]
   });
 });
 
@@ -164,7 +162,6 @@ app.get("/health", (req, res) => {
 
 // ==================== ERROR HANDLING ====================
 
-// 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -172,36 +169,27 @@ app.use((req, res) => {
   });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error("Error:", err);
 
-  // Mongoose validation error
   if (err.name === "ValidationError") {
     const errors = Object.values(err.errors).map(e => e.message);
     return res.status(400).json({ success: false, message: "Validation Error", errors });
   }
-
-  // Mongoose duplicate key error
   if (err.code === 11000) {
     const field = Object.keys(err.keyPattern)[0];
     return res.status(400).json({ success: false, message: `${field} already exists` });
   }
-
-  // JWT errors
   if (err.name === "JsonWebTokenError") {
     return res.status(401).json({ success: false, message: "Invalid token" });
   }
   if (err.name === "TokenExpiredError") {
     return res.status(401).json({ success: false, message: "Token expired" });
   }
-
-  // Multer errors (file too large, unexpected field, etc.)
   if (err.name === "MulterError") {
     return res.status(400).json({ success: false, message: err.message });
   }
 
-  // Default error
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || "Internal server error",
@@ -213,19 +201,17 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-httpServer.listen(PORT,"0.0.0.0", () => {
+httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📡 Socket.io enabled`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
 });
 
-// Handle unhandled promise rejections
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled Rejection:", err);
   httpServer.close(() => process.exit(1));
 });
 
-// Handle uncaught exceptions
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err);
   process.exit(1);
