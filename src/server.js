@@ -25,6 +25,15 @@ connectDB();
 
 
 const app = express()
+// ✅ CORS must be FIRST — before helmet and everything else
+app.use(cors({
+  origin: [
+    "http://localhost:3000",
+    "https://lawhelpzone-frontend-4fq6.vercel.app",
+  ],
+  credentials: true,
+}));
+
 
 // ── Import Socket.io ──────────────────────────────────────────────────────────
 import { initializeSocket } from "./utils/socket.js";
@@ -50,13 +59,6 @@ const httpServer = createServer(app);
 // Security middleware
 securityMiddleware(app);
 
-// CORS Configuration
-app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
 
 // Body parsers
 app.use(cookieParser());
