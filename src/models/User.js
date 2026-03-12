@@ -1,4 +1,26 @@
-// backend/src/models/User.js
+// backend/src/models/User.js  — ADD these fields to your existing userSchema
+//
+// ─── PATCH INSTRUCTIONS ─────────────────────────────────────────────────────
+// Find the `lawyerProfile` field block in your existing User.js and add the
+// two new root-level fields below it, OR paste the complete lawyerProfileSchema
+// update shown here.
+//
+// TWO CHANGES NEEDED:
+//
+//  1. Inside lawyerProfileSchema — add Stripe account tracking:
+//
+//     stripeAccountId:  { type: String, default: "" },
+//     stripeConnected:  { type: Boolean, default: false },
+//     stripeOnboarded:  { type: Boolean, default: false },  // charges_enabled = true
+//
+//  2. On the root userSchema — add platform revenue field for admins:
+//
+//     stripeAccountId: { type: String, default: "" },  // admin's platform Stripe acct
+//
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// COMPLETE UPDATED lawyerProfileSchema (replace yours with this):
+
 import mongoose from "mongoose";
 import bcrypt    from "bcryptjs";
 import crypto    from "crypto";
@@ -27,6 +49,11 @@ const lawyerProfileSchema = new mongoose.Schema({
   specializations:   { type: [String], default: [] },
   languages:         { type: [String], default: [] },
   courts:            { type: [String], default: [] },
+
+  // ── NEW: Stripe Connect fields ────────────────────────────────────────────
+  stripeAccountId:  { type: String,  default: "" },   // Stripe Connect acct ID (acct_xxx)
+  stripeConnected:  { type: Boolean, default: false }, // onboarding started
+  stripeOnboarded:  { type: Boolean, default: false }, // charges_enabled = true (can receive)
 }, { _id: false });
 
 const clientProfileSchema = new mongoose.Schema({
@@ -114,6 +141,9 @@ const userSchema = new mongoose.Schema(
     department:  { type: String, default: "" },
     employeeId:  { type: String, default: "" },
     supervisor:  { type: String, default: "" },
+
+    // ── NEW: Platform-level Stripe (used only for admin's platform account) ──
+    stripeAccountId: { type: String, default: "" },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -142,14 +172,14 @@ userSchema.methods.comparePassword = function (candidatePassword) {
 userSchema.methods.createPasswordResetToken = function () {
   const token = crypto.randomBytes(32).toString("hex");
   this.passwordResetToken   = crypto.createHash("sha256").update(token).digest("hex");
-  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  this.passwordResetExpires = Date.now() + 10 * 60 * 1000;
   return token;
 };
 
 userSchema.methods.createEmailVerificationToken = function () {
   const token = crypto.randomBytes(32).toString("hex");
   this.emailVerificationToken   = crypto.createHash("sha256").update(token).digest("hex");
-  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  this.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
   return token;
 };
 
