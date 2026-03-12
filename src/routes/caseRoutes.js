@@ -146,7 +146,13 @@ router.get("/", async (req, res) => {
       filter.clientId = req.user._id;
     } else if (req.user.role === "lawyer") {
       if (req.query.mine === "true") filter.assignedLawyerId = req.user._id;
-      else { filter.status = "open"; filter.$or = [{ assignedLawyerId: { $exists: false } }, { assignedLawyerId: null }]; }
+      else {
+        // Use $and so a subsequent search $or doesn't overwrite this one
+        filter.$and = [
+          { status: "open" },
+          { $or: [{ assignedLawyerId: { $exists: false } }, { assignedLawyerId: null }] },
+        ];
+      }
     }
     if (status)   filter.status   = status;
     if (category && category !== "All Categories") filter.category = category;
@@ -154,7 +160,10 @@ router.get("/", async (req, res) => {
     if (search) {
       const s = { $regex: search, $options: "i" };
       const searchOr = [{ title: s }, { description: s }, { location: s }];
-      filter.$and ? filter.$and.push({ $or: searchOr }) : (filter.$or = searchOr);
+      // Safely merge: push into existing $and if present, otherwise set $or
+      if (filter.$and) filter.$and.push({ $or: searchOr });
+      else if (filter.$or) filter.$and = [{ $or: filter.$or }, { $or: searchOr }];
+      else filter.$or = searchOr;
     }
 
     const sortMap = { newest: { createdAt: -1 }, oldest: { createdAt: 1 }, budget_high: { budget: -1 } };

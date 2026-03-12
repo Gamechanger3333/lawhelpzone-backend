@@ -111,6 +111,26 @@ const sendEmailNotification = async ({ receiverId, senderName, senderEmail, prev
 };
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   GET /api/messages/users
+   Returns ALL registered users except the requester.
+   Used by the "New Conversation" panel so any role can start a chat.
+   Clients need this because /api/dashboard only returns allUsers for lawyers/admins.
+───────────────────────────────────────────────────────────────────────────── */
+export const getAllUsers = async (req, res) => {
+  try {
+    const myId = req.user._id || req.user.id;
+    const users = await User.find({ _id: { $ne: myId } })
+      .select("name email role profileImage isOnline lastSeen lawyerProfile.specializations lawyerProfile.rating")
+      .sort({ role: 1, name: 1 })
+      .lean();
+    return res.json({ success: true, users });
+  } catch (err) {
+    console.error("getAllUsers error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/* ─────────────────────────────────────────────────────────────────────────────
    GET /api/messages/contacts
    Returns all users this person has exchanged messages with,
    plus lastMessage preview, lastMessageAt, unread count, online status.

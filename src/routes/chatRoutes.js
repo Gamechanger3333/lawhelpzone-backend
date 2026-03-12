@@ -11,12 +11,33 @@ import {
   reactToMessage,
   setTyping,
   getTypingStatus,
+  getAllUsers,
 } from "../controllers/chatController.js";
 
 const router = express.Router();
 
 // All chat routes require authentication
 router.use(protect);
+
+// ── All registered users (New Conversation panel) — BEFORE /:contactId ───────
+router.get("/users",        getAllUsers);                  // GET /api/messages/users
+
+// ── Unread message count — frontend polls this on every page load ─────────────
+router.get("/unread-count", async (req, res) => {
+  try {
+    const Message = (await import("../models/Message.js")).default;
+    const myId    = req.user._id || req.user.id;
+    const count   = await Message.countDocuments({
+      receiverId:         myId,
+      read:               false,
+      deletedForEveryone: { $ne: true },
+      deletedFor:         { $ne: myId.toString() },
+    });
+    return res.json({ success: true, count });
+  } catch (err) {
+    return res.status(500).json({ success: false, count: 0 });
+  }
+});
 
 // ── Contacts ──────────────────────────────────────────────────────────────────
 router.get("/contacts", getContacts);
