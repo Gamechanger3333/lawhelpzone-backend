@@ -258,7 +258,7 @@ export const sendMessage = async (req, res) => {
       senderId,
       receiverId,
       content:   content   || "",
-      type:      fileUrl ? (type === "image" || (fileName && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileName)) ? "image" : "file") : "text",
+      type:      fileUrl ? (type === "audio" || (fileName && /\.(webm|ogg|mp3|wav|m4a)$/i.test(fileName)) ? "audio" : type === "image" || (fileName && /\.(jpg|jpeg|png|gif|webp)$/i.test(fileName)) ? "image" : "file") : "text",
       fileUrl:   fileUrl   || null,
       fileName:  fileName  || null,
       read:      false,

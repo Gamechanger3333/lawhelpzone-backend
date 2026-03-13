@@ -29,7 +29,7 @@ const paymentSchema = new mongoose.Schema(
     currency:      { type: String, default: "usd", lowercase: true },
 
     // ── Stripe identifiers ────────────────────────────────────────────────────
-    stripePaymentIntentId: { type: String, unique: true, sparse: true },
+stripePaymentIntentId: { type: String, default: null },
     stripeChargeId:        { type: String, default: null },
     stripeTransferId:      { type: String, default: null },
 
