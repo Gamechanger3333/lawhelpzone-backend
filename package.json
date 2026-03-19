@@ -23,7 +23,7 @@
     "chat",
     "notifications"
   ],
-  "author": "LawHelpZone Team",
+  "author": "Razia",
   "license": "MIT",
   "dependencies": {
     "bcryptjs": "^3.0.3",
