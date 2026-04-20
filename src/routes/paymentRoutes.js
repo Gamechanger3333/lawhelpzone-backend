@@ -4,7 +4,8 @@
 // ⚠️  The webhook route must receive the RAW body — register it like this in server.js:
 //   app.use("/api/payments/webhook", express.raw({ type: "application/json" }));
 //   app.use("/api/payments", paymentRoutes);   // after express.json()
-
+import dotenv from 'dotenv';
+dotenv.config();
 import express from "express";
 import Stripe from "stripe";
 import User from "../models/User.js";
@@ -303,6 +304,115 @@ router.post("/webhook", async (req, res) => {
   }
 
   return res.json({ received: true });
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/payments/history
+// Client's payment history (paginated)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/history", protect, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, status } = req.query;
+    const filter = { clientId: req.user._id };
+    if (status && status !== "all") filter.paymentStatus = status;
+
+    const [payments, total] = await Promise.all([
+      Payment.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(Number(limit))
+        .populate("lawyerId", "name email profileImage")
+        .populate("caseId", "title")
+        .lean(),
+      Payment.countDocuments(filter),
+    ]);
+
+    return res.json({
+      payments,
+      total,
+      page:  Number(page),
+      pages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    console.error("Payment history error:", err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/payments/admin/revenue
+// Admin overview: platform revenue, gross volume, payouts + all payments
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/admin/revenue", protect, async (req, res) => {
+  try {
+    // Optional: add admin role check here
+    // if (req.user.role !== "admin") return res.status(403).json({ message: "Forbidden" });
+
+    const { period = "month", page = 1, limit = 20, status } = req.query;
+
+    // Build date filter based on period
+    const now = new Date();
+    let dateFrom;
+    if      (period === "week")  dateFrom = new Date(now - 7  * 24 * 60 * 60 * 1000);
+    else if (period === "month") dateFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+    else if (period === "year")  dateFrom = new Date(now.getFullYear(), 0, 1);
+    // "all" → no date filter
+
+    const dateFilter = dateFrom ? { createdAt: { $gte: dateFrom } } : {};
+    const statusFilter = status && status !== "all" ? { paymentStatus: status } : {};
+    const filter = { ...dateFilter, ...statusFilter };
+
+    // Aggregated stats
+    const [agg] = await Payment.aggregate([
+      { $match: { ...dateFilter } },
+      {
+        $group: {
+          _id: null,
+          platformRevenue: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "succeeded"] }, "$platformFee", 0] },
+          },
+          grossVolume: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "succeeded"] }, "$amount", 0] },
+          },
+          lawyerPayouts: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "succeeded"] }, "$lawyerAmount", 0] },
+          },
+          successfulPayments: {
+            $sum: { $cond: [{ $eq: ["$paymentStatus", "succeeded"] }, 1, 0] },
+          },
+        },
+      },
+    ]);
+
+    // Paginated payment list
+    const [payments, total] = await Promise.all([
+      Payment.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(Number(limit))
+        .populate("clientId", "name email profileImage")
+        .populate("lawyerId", "name email profileImage")
+        .populate("caseId",   "title")
+        .lean(),
+      Payment.countDocuments(filter),
+    ]);
+
+    return res.json({
+      platformRevenue:    agg?.platformRevenue    ?? 0,
+      grossVolume:        agg?.grossVolume         ?? 0,
+      lawyerPayouts:      agg?.lawyerPayouts       ?? 0,
+      successfulPayments: agg?.successfulPayments  ?? 0,
+      payments,
+      total,
+      page:  Number(page),
+      pages: Math.ceil(total / limit),
+    });
+  } catch (err) {
+    console.error("Admin revenue error:", err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
 });
 
 export default router;

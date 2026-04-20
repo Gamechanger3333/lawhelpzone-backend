@@ -25,14 +25,16 @@ const stripe = () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Create a Stripe Connect Standard account for a lawyer.
+ * Create a Stripe Connect Express account for a lawyer.
  * Returns the account object (contains .id = "acct_xxx").
  */
 export const createConnectAccount = async ({ email, name, lawyerId }) => {
-  return stripe.accounts.create({
-    type:  "express",       // Express = Stripe-hosted dashboard for lawyers
+  return stripe().accounts.create({
+    type:  "express",
     email,
-    display_name: name,
+    business_profile: {
+      name: name,
+    },
     capabilities: {
       card_payments: { requested: true },
       transfers:     { requested: true },
@@ -49,7 +51,7 @@ export const createConnectAccount = async ({ email, name, lawyerId }) => {
 export const createAccountLink = async ({ accountId, lawyerId }) => {
   const baseUrl = process.env.CLIENT_URL || "http://localhost:3000";
 
-  return stripe.accountLinks.create({
+  return stripe().accountLinks.create({
     account:     accountId,
     refresh_url: `${baseUrl}/dashboard/payments/stripe/refresh`,
     return_url:  `${baseUrl}/dashboard/payments/stripe/success?lawyerId=${lawyerId}`,
@@ -61,7 +63,7 @@ export const createAccountLink = async ({ accountId, lawyerId }) => {
  * Retrieve a Connect account to check onboarding status.
  */
 export const retrieveAccount = async (accountId) => {
-  return stripe.accounts.retrieve(accountId);
+  return stripe().accounts.retrieve(accountId);
 };
 
 /**
@@ -69,7 +71,7 @@ export const retrieveAccount = async (accountId) => {
  * Lawyers use this to view their payouts.
  */
 export const createLoginLink = async (accountId) => {
-  return stripe.accounts.createLoginLink(accountId);
+  return stripe().accounts.createLoginLink(accountId);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,17 +102,15 @@ export const createPaymentIntent = async ({
   metadata = {},
   description = "LawHelpZone legal service payment",
 }) => {
-  return stripe.paymentIntents.create({
+  return stripe().paymentIntents.create({
     amount:   amountCents,
     currency,
     description,
-    // Destination charge: amount goes to platform, then auto-transferred minus fee
     application_fee_amount: platformFeeCents,
     transfer_data: {
       destination: lawyerStripeAccountId,
     },
     metadata,
-    // Allow client to confirm with any payment method
     automatic_payment_methods: { enabled: true },
   });
 };
@@ -119,14 +119,14 @@ export const createPaymentIntent = async ({
  * Retrieve a PaymentIntent by ID.
  */
 export const retrievePaymentIntent = async (paymentIntentId) => {
-  return stripe.paymentIntents.retrieve(paymentIntentId);
+  return stripe().paymentIntents.retrieve(paymentIntentId);
 };
 
 /**
  * Cancel a PaymentIntent (before it's confirmed).
  */
 export const cancelPaymentIntent = async (paymentIntentId) => {
-  return stripe.paymentIntents.cancel(paymentIntentId);
+  return stripe().paymentIntents.cancel(paymentIntentId);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ export const cancelPaymentIntent = async (paymentIntentId) => {
 export const createRefund = async ({ chargeId, amountCents, reason = "requested_by_customer" }) => {
   const params = { charge: chargeId, reason };
   if (amountCents) params.amount = amountCents;
-  return stripe.refunds.create(params);
+  return stripe().refunds.create(params);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ export const createRefund = async ({ chargeId, amountCents, reason = "requested_
  * @param {string} signature   Value of stripe-signature header
  */
 export const constructWebhookEvent = (rawBody, signature) => {
-  return stripe.webhooks.constructEvent(
+  return stripe().webhooks.constructEvent(
     rawBody,
     signature,
     process.env.STRIPE_WEBHOOK_SECRET
@@ -174,11 +174,10 @@ export const constructWebhookEvent = (rawBody, signature) => {
  * Useful for saving payment methods for repeat clients.
  */
 export const createOrGetCustomer = async ({ email, name, userId }) => {
-  // Search for existing customer first
-  const existing = await stripe.customers.list({ email, limit: 1 });
+  const existing = await stripe().customers.list({ email, limit: 1 });
   if (existing.data.length > 0) return existing.data[0];
 
-  return stripe.customers.create({
+  return stripe().customers.create({
     email,
     name,
     metadata: { userId: userId.toString() },

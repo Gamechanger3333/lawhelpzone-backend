@@ -27,7 +27,7 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
     httpOnly: true,
     secure: isProd,
     sameSite: "lax",
-    maxAge: 15 * 60 * 1000, // 15 minutes
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days (was 15 minutes — caused constant logouts)
   });
 
   res.cookie("refreshToken", refreshToken, {
@@ -247,7 +247,6 @@ router.post("/forgot-password", passwordResetLimiter, async (req, res) => {
 // ==================== RESET PASSWORD ====================
 // POST /api/auth/reset-password/:token
 // Frontend sends: { password }
-// Token comes from URL (email link → /auth/reset-password/TOKEN)
 router.post("/reset-password/:token", validatePasswordReset, async (req, res) => {
   try {
     const { token } = req.params;
@@ -257,7 +256,6 @@ router.post("/reset-password/:token", validatePasswordReset, async (req, res) =>
       return res.status(400).json({ success: false, message: "Reset token is required" });
     }
 
-    // Hash the token and look it up
     const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
 
     const user = await User.findOne({
@@ -272,17 +270,13 @@ router.post("/reset-password/:token", validatePasswordReset, async (req, res) =>
       });
     }
 
-    // Update password & clear token fields
     user.password             = password;
     user.passwordResetToken   = undefined;
     user.passwordResetExpires = undefined;
     user.passwordChangedAt    = Date.now();
-
-    // Invalidate all existing sessions
-    user.refreshToken = undefined;
+    user.refreshToken         = undefined;
     await user.save();
 
-    // Clear cookies so user is logged out
     res.clearCookie("accessToken");
     res.clearCookie("refreshToken");
 
@@ -380,7 +374,7 @@ router.post("/refresh-token", async (req, res) => {
       httpOnly: true,
       secure:   process.env.NODE_ENV === "production",
       sameSite: "lax",
-      maxAge:   15 * 60 * 1000,
+      maxAge:   7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     return res.status(200).json({ success: true, accessToken: newAccessToken });
