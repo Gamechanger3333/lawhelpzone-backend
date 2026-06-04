@@ -1,13 +1,9 @@
-// backend/src/middleware/validators.js
 import { body, validationResult } from "express-validator";
 
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      message: errors.array()[0].msg,
-    });
+    return res.status(400).json({ success: false, message: errors.array()[0].msg });
   }
   next();
 };
@@ -16,8 +12,7 @@ export const validateSignup = [
   body("fullName")
     .trim()
     .notEmpty().withMessage("Full name is required")
-    .isLength({ min: 2  }).withMessage("Name must be at least 2 characters")
-    .isLength({ max: 50 }).withMessage("Name cannot exceed 50 characters"),
+    .isLength({ min: 2,  max: 50 }).withMessage("Name must be between 2 and 50 characters"),
 
   body("email")
     .trim()
@@ -36,9 +31,10 @@ export const validateSignup = [
       return true;
     }),
 
+  // Admin role must be assigned server-side only — never by the user
   body("role")
     .optional()
-    .isIn(["client", "lawyer", "admin"]).withMessage("Invalid role"),
+    .isIn(["client", "lawyer"]).withMessage("Invalid role"),
 
   handleValidationErrors,
 ];

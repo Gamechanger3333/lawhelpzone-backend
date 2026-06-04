@@ -1,49 +1,3 @@
-// backend/src/server.js  — DIFF: add payment system
-//
-// ═══════════════════════════════════════════════════════════════════════
-// Copy-paste the sections marked  ── ADD ──  into your existing server.js
-// ═══════════════════════════════════════════════════════════════════════
-//
-// ── ADD 1: New route imports (add near your other route imports) ──────
-//
-//   import paymentRoutes from "./routes/paymentRoutes.js";
-//   import stripeRoutes  from "./routes/stripeRoutes.js";
-//
-//
-// ── ADD 2: Register webhook route BEFORE express.json() ──────────────
-//
-//   ⚠️  CRITICAL ORDER — the webhook must be registered BEFORE the body
-//   parsers so it gets the raw Buffer Stripe needs for signature checks.
-//
-//   Replace this existing block:
-//
-//     app.use(cookieParser());
-//     app.use(express.json({ limit: "10mb" }));
-//     app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-//
-//   With:
-//
-//     app.use(cookieParser());
-//
-//     // ⚠️ Stripe webhook — raw body BEFORE express.json()
-//     app.use("/api/payments/webhook",
-//       express.raw({ type: "application/json" })
-//     );
-//
-//     app.use(express.json({ limit: "10mb" }));
-//     app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-//
-//
-// ── ADD 3: Register routes (add inside the ROUTES section) ────────────
-//
-//   app.use("/api/payments", paymentRoutes);
-//   app.use("/api/stripe",   stripeRoutes);
-//
-//
-// ═══════════════════════════════════════════════════════════════════════
-// FULL SERVER.JS WITH PAYMENT SYSTEM INTEGRATED:
-// ═══════════════════════════════════════════════════════════════════════
-
 import express from "express";
 import { createServer } from "http";
 import { protect } from "./middleware/authMiddleware.js";
@@ -55,58 +9,53 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import multer from "multer";
-import lawyerRoutes from "./routes/lawyerRoutes.js";
-import callRoutes from "./routes/callRoutes.js";
-import searchRoutes from "./routes/searchRoutes.js";
-import profileRoutes from "./routes/profileRoutes.js";
 import connectDB from "./config/database.js";
 
-// ── NEW ──
-import paymentRoutes from "./routes/paymentRoutes.js";
-import stripeRoutes  from "./routes/stripeRoutes.js";
-// ─────────
+import authRoutes         from "./routes/authRoutes.js";
+import caseRoutes         from "./routes/caseRoutes.js";
+import chatRoutes         from "./routes/chatRoutes.js";
+import notificationRoutes from "./routes/notificationRoutes.js";
+import dashboardRoutes    from "./routes/dashboardRoutes.js";
+import lawyerRoutes       from "./routes/lawyerRoutes.js";
+import callRoutes         from "./routes/callRoutes.js";
+import searchRoutes       from "./routes/searchRoutes.js";
+import profileRoutes      from "./routes/profileRoutes.js";
+import adminRoutes        from "./routes/adminroute.js";
+import settingsRoutes     from "./routes/settingsRoutes.js";
+import paymentRoutes      from "./routes/paymentRoutes.js";
+import stripeRoutes       from "./routes/stripeRoutes.js";
+
+import { initializeSocket }   from "./utils/socket.js";
+import { securityMiddleware } from "./middleware/security.js";
+import { apiLimiter }         from "./middleware/rateLimiter.js";
 
 dotenv.config();
 connectDB();
 
 const app = express();
 
-app.use(cors({
-  origin: true,
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
-}));
-
-app.options("/{*path}", (req, res) => {
-  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type,Authorization,Cookie,X-Requested-With");
-  res.sendStatus(204);
-});
-
-import { initializeSocket } from "./utils/socket.js";
-import { securityMiddleware } from "./middleware/security.js";
-import { apiLimiter } from "./middleware/rateLimiter.js";
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
 const uploadsDir = path.join(__dirname, "../uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
 const httpServer = createServer(app);
 
-securityMiddleware(app);
+// ── Middleware ────────────────────────────────────────────────────────────────
 
+app.use(cors({
+  origin:         true,
+  credentials:    true,
+  methods:        ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
+}));
+
+securityMiddleware(app);
 app.use(cookieParser());
 
-// ── NEW: Stripe webhook raw-body parser (MUST be before express.json()) ──────
+// Stripe webhook MUST receive raw body — register before express.json()
 app.use("/api/payments/webhook", express.raw({ type: "application/json" }));
-// ─────────────────────────────────────────────────────────────────────────────
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
@@ -123,21 +72,13 @@ app.use("/api", apiLimiter);
 const io = initializeSocket(httpServer);
 app.set("io", io);
 
-// ==================== ROUTES ====================
-
-import authRoutes         from "./routes/authRoutes.js";
-import caseRoutes         from "./routes/caseRoutes.js";
-import chatRoutes         from "./routes/chatRoutes.js";
-import notificationRoutes from "./routes/notificationRoutes.js";
-import dashboardRoutes    from "./routes/dashboardRoutes.js";
-import adminRoutes        from "./routes/adminroute.js";
-import settingsRoutes     from "./routes/settingsRoutes.js";
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 app.use("/api/auth",          authRoutes);
+app.use("/api/chat",          chatRoutes);
 app.use("/api/messages",      chatRoutes);
 app.use("/api",               profileRoutes);
 app.use("/api/cases",         caseRoutes);
-app.use("/api/chat",          chatRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/dashboard",     dashboardRoutes);
 app.use("/api/lawyers",       lawyerRoutes);
@@ -145,11 +86,10 @@ app.use("/api/calls",         callRoutes);
 app.use("/api/search",        searchRoutes);
 app.use("/api/admin",         adminRoutes);
 app.use("/api/settings",      settingsRoutes);
+app.use("/api/payments",      paymentRoutes);
+app.use("/api/stripe",        stripeRoutes);
 
-// ── NEW ──
-app.use("/api/payments", paymentRoutes);
-app.use("/api/stripe",   stripeRoutes);
-// ─────────
+// ── File upload ───────────────────────────────────────────────────────────────
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
@@ -168,17 +108,22 @@ app.post("/api/upload", protect, upload.single("file"), (req, res) => {
   res.json({ success: true, url, fileUrl: url, fileName: req.file.originalname, fileSize: req.file.size });
 });
 
-app.get("/", (req, res) => res.json({ message: "LawHelpZone API is running ✅" }));
+// ── Health ────────────────────────────────────────────────────────────────────
+
+app.get("/",       (req, res) => res.json({ message: "LawHelpZone API is running ✅" }));
 app.get("/health", (req, res) => res.json({
-  status: "healthy",
+  status:    "healthy",
   timestamp: new Date().toISOString(),
-  database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+  database:  mongoose.connection.readyState === 1 ? "connected" : "disconnected",
 }));
+
+// ── Error handlers ────────────────────────────────────────────────────────────
 
 app.use((req, res) => res.status(404).json({ success: false, message: `Route not found: ${req.method} ${req.path}` }));
 
 app.use((err, req, res, next) => {
   console.error("Error:", err);
+
   if (err.name === "ValidationError") {
     const errors = Object.values(err.errors).map(e => e.message);
     return res.status(400).json({ success: false, message: "Validation Error", errors });
@@ -190,12 +135,15 @@ app.use((err, req, res, next) => {
   if (err.name === "JsonWebTokenError") return res.status(401).json({ success: false, message: "Invalid token" });
   if (err.name === "TokenExpiredError")  return res.status(401).json({ success: false, message: "Token expired" });
   if (err.name === "MulterError")        return res.status(400).json({ success: false, message: err.message });
+
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || "Internal server error",
     ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
   });
 });
+
+// ── Start ─────────────────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, "0.0.0.0", () => {

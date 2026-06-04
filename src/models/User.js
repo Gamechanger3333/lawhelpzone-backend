@@ -1,26 +1,4 @@
-// backend/src/models/User.js  — ADD these fields to your existing userSchema
-//
-// ─── PATCH INSTRUCTIONS ─────────────────────────────────────────────────────
-// Find the `lawyerProfile` field block in your existing User.js and add the
-// two new root-level fields below it, OR paste the complete lawyerProfileSchema
-// update shown here.
-//
-// TWO CHANGES NEEDED:
-//
-//  1. Inside lawyerProfileSchema — add Stripe account tracking:
-//
-//     stripeAccountId:  { type: String, default: "" },
-//     stripeConnected:  { type: Boolean, default: false },
-//     stripeOnboarded:  { type: Boolean, default: false },  // charges_enabled = true
-//
-//  2. On the root userSchema — add platform revenue field for admins:
-//
-//     stripeAccountId: { type: String, default: "" },  // admin's platform Stripe acct
-//
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// COMPLETE UPDATED lawyerProfileSchema (replace yours with this):
-
+// backend/src/models/User.js
 import mongoose from "mongoose";
 import bcrypt    from "bcryptjs";
 import crypto    from "crypto";
@@ -49,11 +27,10 @@ const lawyerProfileSchema = new mongoose.Schema({
   specializations:   { type: [String], default: [] },
   languages:         { type: [String], default: [] },
   courts:            { type: [String], default: [] },
-
-  // ── NEW: Stripe Connect fields ────────────────────────────────────────────
-  stripeAccountId:  { type: String,  default: "" },   // Stripe Connect acct ID (acct_xxx)
-  stripeConnected:  { type: Boolean, default: false }, // onboarding started
-  stripeOnboarded:  { type: Boolean, default: false }, // charges_enabled = true (can receive)
+  // Stripe Connect
+  stripeAccountId:   { type: String,  default: "" },
+  stripeConnected:   { type: Boolean, default: false },
+  stripeOnboarded:   { type: Boolean, default: false },
 }, { _id: false });
 
 const clientProfileSchema = new mongoose.Schema({
@@ -100,12 +77,12 @@ const userSchema = new mongoose.Schema(
     emailVerificationToken:   { type: String, select: false },
     emailVerificationExpires: Date,
     refreshToken:             { type: String, select: false },
-    verified:      { type: Boolean, default: false },
-    emailVerified: { type: Boolean, default: false },
-    active:        { type: Boolean, default: true },
-    suspended:     { type: Boolean, default: false },
+    verified:         { type: Boolean, default: false },
+    emailVerified:    { type: Boolean, default: false },
+    active:           { type: Boolean, default: true },
+    suspended:        { type: Boolean, default: false },
     suspensionReason: String,
-    profileImage: { type: String, default: "" },
+    profileImage:     { type: String, default: "" },
     phone: {
       type:     String,
       validate: {
@@ -136,14 +113,12 @@ const userSchema = new mongoose.Schema(
         loginAt:   { type: Date, default: Date.now },
       },
     ],
-    lawyerProfile: { type: lawyerProfileSchema, default: () => ({}) },
-    clientProfile: { type: clientProfileSchema, default: () => ({}) },
-    department:  { type: String, default: "" },
-    employeeId:  { type: String, default: "" },
-    supervisor:  { type: String, default: "" },
-
-    // ── NEW: Platform-level Stripe (used only for admin's platform account) ──
-    stripeAccountId: { type: String, default: "" },
+    lawyerProfile:   { type: lawyerProfileSchema,  default: () => ({}) },
+    clientProfile:   { type: clientProfileSchema,  default: () => ({}) },
+    department:      { type: String, default: "" },
+    employeeId:      { type: String, default: "" },
+    supervisor:      { type: String, default: "" },
+    stripeAccountId: { type: String, default: "" }, // platform-level (admin only)
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );

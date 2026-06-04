@@ -1,7 +1,36 @@
-// backend/src/controllers/profileController.js
-// Handles GET /api/auth/me and all PUT /profile endpoints (per role).
-// Imported by profileRoutes.js and lawyerRoutes.js.
+
+import bcrypt from "bcryptjs";
 import User from "../models/User.js";
+
+export const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, password, confirmPassword } = req.body;
+
+    if (!currentPassword || !password || !confirmPassword)
+      return res.status(400).json({ success: false, message: "All password fields are required" });
+
+    if (password.length < 8)
+      return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
+
+    if (password !== confirmPassword)
+      return res.status(400).json({ success: false, message: "Passwords do not match" });
+
+    const user = await User.findById(req.user._id).select("+password");
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    const match = await bcrypt.compare(currentPassword, user.password);
+    if (!match)
+      return res.status(401).json({ success: false, message: "Current password incorrect" });
+
+    user.password = await bcrypt.hash(password, 12);
+    await user.save();
+
+    res.json({ success: true, message: "Password changed successfully" });
+  } catch (err) {
+    console.error("change-password error:", err);
+    res.status(500).json({ success: false, message: "Failed to change password" });
+  }
+};
 
 // ─── helpers ──────────────────────────────────────────────────────
 const pick = (obj, keys) =>
