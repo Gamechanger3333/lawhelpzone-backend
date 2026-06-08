@@ -24,6 +24,7 @@ import adminRoutes        from "./routes/adminroute.js";
 import settingsRoutes     from "./routes/settingsRoutes.js";
 import paymentRoutes      from "./routes/paymentRoutes.js";
 import stripeRoutes       from "./routes/stripeRoutes.js";
+import aiRoutes           from "./routes/aiRoutes.js";
 
 import { initializeSocket }   from "./utils/socket.js";
 import { securityMiddleware } from "./middleware/security.js";
@@ -44,8 +45,19 @@ const httpServer = createServer(app);
 
 // ── Middleware ────────────────────────────────────────────────────────────────
 
+const ALLOWED_ORIGINS = [
+  process.env.FRONTEND_URL,
+  "http://localhost:3000",
+].filter(Boolean);
+
 app.use(cors({
-  origin:         true,
+  origin: (origin, callback) => {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: origin ${origin} not allowed`));
+    }
+  },
   credentials:    true,
   methods:        ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
@@ -88,6 +100,7 @@ app.use("/api/admin",         adminRoutes);
 app.use("/api/settings",      settingsRoutes);
 app.use("/api/payments",      paymentRoutes);
 app.use("/api/stripe",        stripeRoutes);
+app.use("/api/ai",           aiRoutes);
 
 // ── File upload ───────────────────────────────────────────────────────────────
 
@@ -99,7 +112,27 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
+const ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "text/plain",
+]);
+
+const fileFilter = (req, file, cb) => {
+  if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`File type not allowed: ${file.mimetype}`), false);
+  }
+};
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter,
+});
 
 app.post("/api/upload", protect, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No file uploaded" });

@@ -3,6 +3,7 @@ import express from "express";
 import Case    from "../models/Case.js";
 import User    from "../models/User.js";
 import { protect, restrictTo } from "../middleware/authMiddleware.js";
+import { createNotification } from "../utils/notificationService.js";
 
 const router = express.Router();
 router.use(protect);
@@ -204,7 +205,6 @@ router.post("/", restrictTo("client","admin"), async (req, res) => {
     // Notify all lawyers about new case
     try {
       const lawyers = await User.find({ role: "lawyer" }).select("_id").lean();
-      const { createNotification } = await import("./notificationRoutes.js");
       await Promise.all(lawyers.slice(0, 50).map(l =>
         createNotification({ userId: l._id, title: `New Case: ${title}`, body: description.slice(0,100), type: "case", meta: { caseId: newCase._id } })
       ));
@@ -277,7 +277,6 @@ router.post("/:id/proposals", restrictTo("lawyer"), async (req, res) => {
 
     // Notify client
     try {
-      const { createNotification } = await import("./notificationRoutes.js");
       await createNotification({ userId: c.clientId, title: `New Proposal from ${req.user.name}`, body: `A lawyer submitted a proposal on your case: ${c.title}`, type: "case", meta: { caseId: c._id, lawyerId: req.user._id } });
     } catch {}
 
@@ -301,7 +300,6 @@ router.post("/:id/accept", restrictTo("client"), async (req, res) => {
     await c.save();
 
     try {
-      const { createNotification } = await import("./notificationRoutes.js");
       await createNotification({ userId: lawyerId, title: "Proposal Accepted!", body: `Your proposal on "${c.title}" was accepted. You can now contact the client.`, type: "success", meta: { caseId: c._id } });
     } catch {}
 
@@ -322,7 +320,6 @@ router.post("/:id/assign", restrictTo("admin"), async (req, res) => {
     if (!c) return res.status(404).json({ success: false, message: "Case not found" });
 
     try {
-      const { createNotification } = await import("./notificationRoutes.js");
       await Promise.all([
         createNotification({ userId: lawyerId,  title: "Case Assigned", body: `Admin assigned you to: ${c.title}`, type: "case", meta: { caseId: c._id } }),
         createNotification({ userId: c.clientId,title: "Lawyer Assigned", body: `A lawyer has been assigned to your case: ${c.title}`, type: "success", meta: { caseId: c._id } }),

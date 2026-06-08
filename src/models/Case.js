@@ -43,8 +43,11 @@ const caseSchema = new mongoose.Schema({
     {
       lawyerId:         { type: mongoose.Schema.Types.ObjectId, ref: "User" },
       message:          String,
+      fee:              { type: Number, default: 0 },
       proposedBudget:   Number,
       proposedDeadline: Date,
+      status:           { type: String, enum: ["pending", "accepted", "rejected"], default: "pending" },
+      submittedAt:      { type: Date, default: Date.now },
       createdAt:        { type: Date, default: Date.now },
     },
   ],

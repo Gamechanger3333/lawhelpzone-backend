@@ -5,36 +5,37 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
-    "start":        "node src/server.js",
-    "dev":          "nodemon src/server.js",
-    "seed":         "node scripts/seedData.js",
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "seed": "node scripts/seedData.js",
     "fix-location": "node scripts/fixLocationData.js"
   },
   "author": "Razia",
   "license": "MIT",
   "dependencies": {
-    "bcryptjs":           "^3.0.3",
-    "cookie-parser":      "^1.4.7",
-    "cors":               "^2.8.6",
-    "dotenv":             "^17.3.1",
-    "express":            "^5.2.1",
+    "axios": "^1.17.0",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
-    "express-validator":  "^7.3.1",
-    "helmet":             "^8.1.0",
-    "hpp":                "^0.2.3",
-    "jsonwebtoken":       "^9.0.3",
-    "mongoose":           "^8.23.0",
-    "multer":             "^2.0.2",
-    "nodemailer":         "^7.0.13",
-    "socket.io":          "^4.8.3",
-    "stripe":             "^20.4.1",
-    "validator":          "^13.15.26"
+    "express-validator": "^7.3.1",
+    "helmet": "^8.1.0",
+    "hpp": "^0.2.3",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.23.0",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.13",
+    "socket.io": "^4.8.3",
+    "stripe": "^20.4.1",
+    "validator": "^13.15.26"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"
   },
   "engines": {
     "node": ">=18.0.0",
-    "npm":  ">=9.0.0"
+    "npm": ">=9.0.0"
   }
 }

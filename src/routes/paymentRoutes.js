@@ -348,7 +348,7 @@ router.get("/history", protect, async (req, res) => {
 router.get("/admin/revenue", protect, async (req, res) => {
   try {
     // Optional: add admin role check here
-    // if (req.user.role !== "admin") return res.status(403).json({ message: "Forbidden" });
+    if (req.user.role !== "admin") return res.status(403).json({ success: false, message: "Forbidden" });
 
     const { period = "month", page = 1, limit = 20, status } = req.query;
 
