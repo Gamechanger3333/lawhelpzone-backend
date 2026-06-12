@@ -12,13 +12,275 @@
 //   Fallback: llama3-70b-8192        — smarter, for complex tasks
 
 import axios from "axios";
+import User from "../models/User.js";
+import Case from "../models/Case.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
+
+// ── Tool definitions (OpenAI-compatible function calling, supported by Groq) ──
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "searchLawyers",
+      description: "Search registered lawyers on the platform by specialization, location, or availability.",
+      parameters: {
+        type: "object",
+        properties: {
+          specialization: { type: "string", description: "e.g. Family Law, Criminal Law" },
+          location:       { type: "string", description: "City or jurisdiction" },
+          minRating:      { type: "number", description: "Minimum rating 0-5" },
+          onlyAvailable:  { type: "boolean", description: "Only return lawyers currently available" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "searchCases",
+      description: "Search legal cases on the platform by category, status, or location. Results are automatically scoped to what the requesting user is allowed to see.",
+      parameters: {
+        type: "object",
+        properties: {
+          category: { type: "string", description: "e.g. Family Law, Business Law" },
+          status:   { type: "string", enum: ["open", "in-progress", "closed", "cancelled"] },
+          location: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getLawyerProfile",
+      description: "Get detailed profile information for a specific lawyer by name or email.",
+      parameters: {
+        type: "object",
+        properties: {
+          nameOrEmail: { type: "string", description: "Lawyer's name or email to look up" },
+        },
+        required: ["nameOrEmail"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "searchClients",
+      description: "Search registered clients on the platform by name or email. Admin only.",
+      parameters: {
+        type: "object",
+        properties: {
+          nameOrEmail: { type: "string", description: "Client's name or email to search for" },
+        },
+      },
+    },
+  },
+];
+
+// ── Tool handlers — actual DB queries, scoped by requesting user ──────────────
+const MAX_RESULTS = 10;
+
+const toolHandlers = {
+  searchLawyers: async ({ specialization, location, minRating, onlyAvailable }) => {
+    const filter = { role: "lawyer" };
+    if (specialization) filter["lawyerProfile.specializations"] = { $regex: specialization, $options: "i" };
+    if (location) filter["lawyerProfile.jurisdiction"] = { $regex: location, $options: "i" };
+    if (minRating) filter["lawyerProfile.rating"] = { $gte: minRating };
+    if (onlyAvailable) filter["lawyerProfile.isAvailable"] = true;
+
+    const lawyers = await User.find(filter)
+      .select("name email lawyerProfile.specializations lawyerProfile.jurisdiction lawyerProfile.rating lawyerProfile.hourlyRate lawyerProfile.isAvailable lawyerProfile.yearsOfExperience")
+      .limit(MAX_RESULTS)
+      .lean();
+
+    return lawyers.map(l => ({
+      name: l.name,
+      email: l.email,
+      specializations: l.lawyerProfile?.specializations,
+      jurisdiction: l.lawyerProfile?.jurisdiction,
+      rating: l.lawyerProfile?.rating,
+      hourlyRate: l.lawyerProfile?.hourlyRate,
+      isAvailable: l.lawyerProfile?.isAvailable,
+      yearsOfExperience: l.lawyerProfile?.yearsOfExperience,
+    }));
+  },
+
+  searchCases: async ({ category, status, location }, requester) => {
+    const filter = {};
+    if (category) filter.category = category;
+    if (status) filter.status = status;
+    if (location) filter.location = { $regex: location, $options: "i" };
+
+    // Scope by role — clients/lawyers only see their own cases; admins see all
+    if (requester?.role === "client") {
+      filter.clientId = requester._id;
+    } else if (requester?.role === "lawyer") {
+      filter.$or = [{ assignedLawyerId: requester._id }, { status: "open" }];
+    }
+
+    const cases = await Case.find(filter)
+      .select("title category status location country budget deadline urgency")
+      .sort({ createdAt: -1 })
+      .limit(MAX_RESULTS)
+      .lean();
+
+    return cases;
+  },
+
+  getLawyerProfile: async ({ nameOrEmail }) => {
+    const lawyer = await User.findOne({
+      role: "lawyer",
+      $or: [
+        { name: { $regex: nameOrEmail, $options: "i" } },
+        { email: { $regex: nameOrEmail, $options: "i" } },
+      ],
+    })
+      .select("name email lawyerProfile")
+      .lean();
+
+    if (!lawyer) return { error: "No lawyer found matching that name or email." };
+    return { name: lawyer.name, email: lawyer.email, profile: lawyer.lawyerProfile };
+  },
+
+  searchClients: async ({ nameOrEmail }, requester) => {
+    if (requester?.role !== "admin") return { error: "Not authorized" };
+    const filter = { role: "client" };
+    if (nameOrEmail) {
+      filter.$or = [
+        { name: { $regex: nameOrEmail, $options: "i" } },
+        { email: { $regex: nameOrEmail, $options: "i" } },
+      ];
+    }
+    const clients = await User.find(filter)
+      .select("name email createdAt")
+      .limit(MAX_RESULTS)
+      .lean();
+    return clients;
+  },
+};
+
+// ── Tool-calling wrapper around Groq ───────────────────────────────────────
+const callGroqWithTools = async (systemPrompt, userPrompt, requester = null, retries = 2) => {
+  const apiKey = process.env.GROQ_API_KEY;
+
+  if (!apiKey || apiKey.trim() === "" || apiKey === "gsk_...") {
+    throw new Error(
+      "GROQ_API_KEY is not configured. Add it to your .env file. Get one free at https://console.groq.com"
+    );
+  }
+
+  let messages = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+
+  for (const model of TOOL_MODELS) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const response = await axios.post(
+          GROQ_API_URL,
+          {
+            model,
+            messages,
+            tools: TOOLS,
+            tool_choice: "auto",
+            max_tokens: 500,
+            temperature: 0.3,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`,
+            },
+            timeout: 30000,
+          }
+        );
+
+        const choice = response.data?.choices?.[0];
+        const msg = choice?.message;
+
+        // If the model wants to call tools, execute them and loop back
+        if (msg?.tool_calls?.length) {
+          messages.push(msg);
+
+          for (const call of msg.tool_calls) {
+            const fnName = call.function?.name;
+            const handler = toolHandlers[fnName];
+            let result;
+            try {
+              const args = JSON.parse(call.function?.arguments || "{}");
+              result = handler ? await handler(args, requester) : { error: "Unknown tool" };
+            } catch (e) {
+              result = { error: e.message };
+            }
+
+            messages.push({
+              role: "tool",
+              tool_call_id: call.id,
+              content: JSON.stringify(result),
+            });
+          }
+
+          // Re-call the same model with tool results appended
+          const followUp = await axios.post(
+            GROQ_API_URL,
+            { model, messages, max_tokens: 500, temperature: 0.3 },
+            {
+              headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apiKey}` },
+              timeout: 30000,
+            }
+          );
+          const finalText = followUp.data?.choices?.[0]?.message?.content;
+          if (finalText) return finalText.trim();
+          throw new Error("Empty response from Groq after tool call");
+        }
+
+        if (msg?.content) return msg.content.trim();
+        throw new Error("Empty response from Groq");
+
+      } catch (err) {
+        const status = err?.response?.status;
+        const errMsg = err?.response?.data?.error?.message || err.message;
+
+        console.error(`Groq [${model}] attempt ${attempt}/${retries} failed — status: ${status}, message: ${errMsg}`);
+
+        if (status === 401) {
+          throw new Error("Groq API key is invalid. Check GROQ_API_KEY in your .env file.");
+        }
+        if (status === 400 || status === 404) break;
+        if (status === 429) {
+          const retryAfter = parseInt(err?.response?.headers?.["retry-after"] || "10", 10);
+          const waitMs = Math.min(retryAfter * 1000, 15000);
+          console.log(`Groq rate limit hit. Waiting ${waitMs / 1000}s before retry…`);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+        if ((status === 500 || status === 503) && attempt < retries) {
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        break;
+      }
+    }
+  }
+
+  throw new Error("Groq request failed. Please try again in a moment.");
+};
 
 // Primary model first (cheapest on TPM), smarter model as fallback
 const MODELS = [
   "llama-3.1-8b-instant",   // 30 RPM, 14400 RPD — workhorse
   "llama3-70b-8192",        // 30 RPM, 14400 RPD — fallback if 8b fails
+];
+
+// Tool-calling needs a model that reliably honors function-call requests.
+// llama-3.1-8b-instant often skips tools and hallucinates instead — use
+// larger models first for any request that may need DB lookups.
+const TOOL_MODELS = [
+  "llama-3.3-70b-versatile",
+  "llama3-70b-8192",
 ];
 
 // ── Core Groq caller ──────────────────────────────────────────────────────────
@@ -102,7 +364,7 @@ const callGroq = async (systemPrompt, userPrompt, retries = 2) => {
 };
 
 // ── Feature 1: Legal Assistant Chat ──────────────────────────────────────────
-export const getLegalAssistantReply = async (userMessage, chatHistory = [], platformContext = null) => {
+export const getLegalAssistantReply = async (userMessage, chatHistory = [], platformContext = null, requester = null) => {
   const historyText = chatHistory
     .slice(-6)
     .map(m => `${m.role === "user" ? "User" : "Assistant"}: ${m.content}`)
@@ -121,17 +383,18 @@ RULES:
 - Never make up case citations or laws.
 - Be professional and empathetic.
 - Use platform data when provided to answer data questions accurately.
+- You have tools to search lawyers, cases, and lawyer profiles on the platform. You MUST call the relevant tool whenever the user asks to find/list/search lawyers, cases, pricing, or specializations — NEVER invent names, lawyers, or data from memory. If a tool returns no results or an error, say so honestly instead of making something up.
 ${contextBlock}`;
 
   const user = historyText
     ? `Previous conversation:\n${historyText}\n\nUser: ${userMessage}`
     : userMessage;
 
-  return await callGroq(system, user);
+  return await callGroqWithTools(system, user, requester);
 };
 
 // ── Feature 2: Admin AI Assistant ────────────────────────────────────────────
-export const getAdminAssistantReply = async (userMessage, chatHistory = [], platformContext = {}) => {
+export const getAdminAssistantReply = async (userMessage, chatHistory = [], platformContext = {}, requester = null) => {
   const historyText = chatHistory
     .slice(-6)
     .map(m => `${m.role === "user" ? "Admin" : "Assistant"}: ${m.content}`)
@@ -148,13 +411,13 @@ LIVE PLATFORM DATA:
 - In-Progress Cases: ${platformContext.inProgressCases ?? "N/A"}
 - Cases This Month: ${platformContext.thisMonthCases ?? "N/A"}
 
-YOUR ROLE: Answer questions about stats, analyse trends, suggest improvements. Be direct and data-driven. Keep responses under 300 words.`;
+YOUR ROLE: Answer questions about stats, analyse trends, suggest improvements. You have admin-level tools to search/list lawyers, clients, and cases across the entire platform (no scoping restrictions) — you MUST call the relevant tool whenever asked to find, list, or look up lawyers, clients, or cases. NEVER invent names or data from memory; if a tool returns no results or an error, say so honestly. Be direct and data-driven. Keep responses under 300 words.`;
 
   const user = historyText
     ? `Previous conversation:\n${historyText}\n\nAdmin: ${userMessage}`
     : userMessage;
 
-  return await callGroq(system, user);
+  return await callGroqWithTools(system, user, requester);
 };
 
 // ── Feature 3: Case Classification ───────────────────────────────────────────

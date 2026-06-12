@@ -130,7 +130,7 @@ export const legalChat = async (req, res) => {
     }
 
     const platformContext = await fetchPlatformContext(req.user.role, req.user._id);
-    const reply = await getLegalAssistantReply(message.trim(), history, platformContext);
+    const reply = await getLegalAssistantReply(message.trim(), history, platformContext, req.user);
 
     return res.json({
       success: true,
@@ -156,7 +156,7 @@ export const adminChat = async (req, res) => {
     }
 
     const platformContext = await fetchPlatformContext("admin", req.user._id);
-    const reply = await getAdminAssistantReply(message.trim(), history, platformContext);
+    const reply = await getAdminAssistantReply(message.trim(), history, platformContext, req.user);
 
     return res.json({ success: true, reply, platformContext });
   } catch (err) {

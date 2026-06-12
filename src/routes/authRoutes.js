@@ -19,6 +19,13 @@ import { sendEmail, emailTemplates } from "../utils/emailService.js";
 
 const router = express.Router();
 
+// ─── Canonical law practice areas (must match Case.js category enum) ──────────
+const LAW_CATEGORIES = [
+  "Business Law", "Criminal Law", "Family Law", "Immigration Law",
+  "Real Estate Law", "Employment Law", "Intellectual Property",
+  "Corporate Law", "Tax Law", "Contract Law",
+];
+
 // ─── Helper: set auth cookies ─────────────────────────────────────────────────
 const setAuthCookies = (res, accessToken, refreshToken) => {
   const isProd = process.env.NODE_ENV === "production";
@@ -53,7 +60,7 @@ const safeUser = (user) => ({
 // Frontend sends: { fullName, email, password, confirmPassword, role }
 router.post("/sign-up", authLimiter, validateSignup, async (req, res) => {
   try {
-    const { fullName, email, password, role } = req.body;
+    const { fullName, email, password, role, specializations } = req.body;
 
     // Check existing user
     const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
@@ -64,6 +71,19 @@ router.post("/sign-up", authLimiter, validateSignup, async (req, res) => {
       });
     }
 
+    // Validate specializations for lawyer signups
+    let validSpecializations = [];
+    if (role === "lawyer") {
+      const submitted = Array.isArray(specializations) ? specializations : [];
+      validSpecializations = submitted.filter(s => LAW_CATEGORIES.includes(s));
+      if (validSpecializations.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Please select at least one area of practice / specialization",
+        });
+      }
+    }
+
     // Create user  (fullName → name, as per User model)
     const newUser = await User.create({
       name: fullName.trim(),
@@ -71,6 +91,7 @@ router.post("/sign-up", authLimiter, validateSignup, async (req, res) => {
       password,
       role: role || "client",
       emailVerified: false,
+      ...(role === "lawyer" ? { lawyerProfile: { specializations: validSpecializations } } : {}),
     });
 
     // Generate email verification token
