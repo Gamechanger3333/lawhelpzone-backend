@@ -9,9 +9,38 @@ import {
   analyzeDocument,
   getLawyerCaseAssistance,
   getPlatformInsights,
-} from "../utils/geminiService.js";
+} from "../utils/groqService.js";
 import User from "../models/User.js";
 import Case from "../models/Case.js";
+
+// ── In-memory cache for platform insights (saves Gemini quota) ────────────────
+const insightsCache = {
+  data: null,
+  fetchedAt: null,
+  TTL_MS: 60 * 60 * 1000, // 1 hour (was 10 minutes — too short, burned quota on every visit)
+
+  isValid() {
+    return this.data && this.fetchedAt && Date.now() - this.fetchedAt < this.TTL_MS;
+  },
+
+  set(data) {
+    this.data = data;
+    this.fetchedAt = Date.now();
+  },
+
+  get() {
+    return this.data;
+  },
+
+  clear() {
+    this.data = null;
+    this.fetchedAt = null;
+  },
+
+  ageSeconds() {
+    return this.fetchedAt ? Math.floor((Date.now() - this.fetchedAt) / 1000) : null;
+  },
+};
 
 // ── Helper: fetch live platform context for AI ────────────────────────────────
 const fetchPlatformContext = async (role, userId) => {
@@ -53,9 +82,42 @@ const fetchPlatformContext = async (role, userId) => {
   return null;
 };
 
+// ── Helper: user-friendly AI error message ────────────────────────────────────
+const aiErrorMessage = (err) => {
+  const msg = err.message || "";
+  if (msg.includes("GEMINI_API_KEY") || msg.includes("not configured")) {
+    return "AI is not configured. The server is missing a Gemini API key. Please contact the administrator.";
+  }
+  if (msg.includes("API key rejected") || msg.includes("401") || msg.includes("403")) {
+    return "AI API key is invalid or expired. Please contact the administrator.";
+  }
+  if (msg.includes("quota") || msg.includes("429")) {
+    return "AI usage limit reached. Please try again in a few minutes.";
+  }
+  if (msg.includes("All Gemini models failed")) {
+    return "AI service is temporarily unavailable. Please try again shortly.";
+  }
+  return "AI assistant encountered an error. Please try again in a moment.";
+};
+
+// ── GET /api/ai/status ────────────────────────────────────────────────────────
+// Health check — confirms Gemini key is set (doesn't call Gemini, just checks env)
+export const aiStatus = (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  const configured = !!(apiKey && apiKey.trim() && apiKey !== "AIza...");
+  return res.json({
+    success: true,
+    ai: {
+      configured,
+      status: configured ? "ready" : "missing_api_key",
+      message: configured
+        ? "Gemini API key is configured."
+        : "GEMINI_API_KEY is not set in environment variables.",
+    },
+  });
+};
+
 // ── POST /api/ai/chat ─────────────────────────────────────────────────────────
-// Legal assistant chatbot — available to all logged-in users.
-// Body: { message, history: [{ role, content }] }
 export const legalChat = async (req, res) => {
   try {
     const { message, history = [] } = req.body;
@@ -67,9 +129,7 @@ export const legalChat = async (req, res) => {
       return res.status(400).json({ success: false, message: "Message too long (max 2000 characters)" });
     }
 
-    // Fetch live context for richer, platform-aware answers
     const platformContext = await fetchPlatformContext(req.user.role, req.user._id);
-
     const reply = await getLegalAssistantReply(message.trim(), history, platformContext);
 
     return res.json({
@@ -79,16 +139,11 @@ export const legalChat = async (req, res) => {
     });
   } catch (err) {
     console.error("AI chat error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "AI assistant encountered an error. Please try again in a moment.",
-    });
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
   }
 };
 
 // ── POST /api/ai/admin-chat ───────────────────────────────────────────────────
-// Admin-only AI assistant with full platform context.
-// Body: { message, history: [{ role, content }] }
 export const adminChat = async (req, res) => {
   try {
     const { message, history = [] } = req.body;
@@ -100,29 +155,36 @@ export const adminChat = async (req, res) => {
       return res.status(400).json({ success: false, message: "Message too long (max 2000 characters)" });
     }
 
-    // Always fetch live platform context for admin
     const platformContext = await fetchPlatformContext("admin", req.user._id);
-
     const reply = await getAdminAssistantReply(message.trim(), history, platformContext);
 
-    return res.json({
-      success: true,
-      reply,
-      platformContext,
-    });
+    return res.json({ success: true, reply, platformContext });
   } catch (err) {
     console.error("Admin AI chat error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Admin AI assistant encountered an error. Please try again.",
-    });
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
   }
 };
 
 // ── GET /api/ai/platform-insights ────────────────────────────────────────────
-// Admin-only: AI-generated platform health insights.
+// Cached for 10 minutes to avoid burning Gemini free-tier quota on every click.
 export const platformInsightsHandler = async (req, res) => {
   try {
+    // Return cached result if still fresh
+    if (insightsCache.isValid()) {
+      console.log(`Platform insights served from cache (${insightsCache.ageSeconds()}s old)`);
+      return res.json({
+        success: true,
+        ...insightsCache.get(),
+        cached: true,
+        cacheAgeSeconds: insightsCache.ageSeconds(),
+      });
+    }
+
+    // Force-refresh: clear cache when ?refresh=true is passed
+    if (req.query.refresh === "true") {
+      insightsCache.clear();
+    }
+
     const start = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const [totalUsers, totalLawyers, totalClients, totalCases, thisMonthCases, openCases] =
       await Promise.all([
@@ -137,19 +199,31 @@ export const platformInsightsHandler = async (req, res) => {
     const stats = { totalUsers, totalLawyers, totalClients, totalCases, thisMonthCases, openCases };
     const insights = await getPlatformInsights(stats);
 
-    return res.json({ success: true, insights, stats });
+    // Store in cache
+    insightsCache.set({ insights, stats });
+
+    return res.json({ success: true, insights, stats, cached: false });
   } catch (err) {
     console.error("Platform insights error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Could not generate platform insights. Please try again.",
-    });
+
+    // If Gemini fails but we have stale cache, return it with a warning
+    if (insightsCache.get()) {
+      console.log("Gemini failed — serving stale cache as fallback");
+      return res.json({
+        success: true,
+        ...insightsCache.get(),
+        cached: true,
+        stale: true,
+        cacheAgeSeconds: insightsCache.ageSeconds(),
+        warning: "Live AI unavailable. Showing last known insights.",
+      });
+    }
+
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
   }
 };
 
 // ── POST /api/ai/classify-case ────────────────────────────────────────────────
-// Auto-classifies a case when client submits it.
-// Body: { title, description }
 export const classifyCaseHandler = async (req, res) => {
   try {
     const { title, description } = req.body;
@@ -170,16 +244,11 @@ export const classifyCaseHandler = async (req, res) => {
     });
   } catch (err) {
     console.error("Case classification error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Case classification encountered an error. Please try again.",
-    });
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
   }
 };
 
 // ── POST /api/ai/analyze-document ────────────────────────────────────────────
-// Analyzes uploaded document text.
-// Body: { text, fileName }
 export const analyzeDocumentHandler = async (req, res) => {
   try {
     const { text, fileName = "document" } = req.body;
@@ -200,16 +269,11 @@ export const analyzeDocumentHandler = async (req, res) => {
     });
   } catch (err) {
     console.error("Document analysis error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Document analysis encountered an error. Please try again.",
-    });
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
   }
 };
 
 // ── POST /api/ai/lawyer-assist ────────────────────────────────────────────────
-// Lawyer-only AI tools: summarize, draft response, extract tasks.
-// Body: { caseTitle, caseDescription, requestType: "summarize" | "response" | "tasks" }
 export const lawyerAssistHandler = async (req, res) => {
   try {
     const { caseTitle, caseDescription, requestType = "summarize" } = req.body;
@@ -233,9 +297,6 @@ export const lawyerAssistHandler = async (req, res) => {
     });
   } catch (err) {
     console.error("Lawyer assist error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "AI lawyer assistant encountered an error. Please try again.",
-    });
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
   }
 };

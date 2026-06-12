@@ -113,15 +113,27 @@ const storage = multer.diskStorage({
 });
 
 const ALLOWED_MIME_TYPES = new Set([
+  // Images
   "image/jpeg", "image/png", "image/gif", "image/webp",
+  // Documents
   "application/pdf",
   "application/msword",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "text/plain",
+  // Audio — voice notes (browsers record as webm/ogg/mp4)
+  "audio/webm",
+  "audio/webm;codecs=opus",
+  "audio/ogg",
+  "audio/ogg;codecs=opus",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/wav",
 ]);
 
 const fileFilter = (req, file, cb) => {
-  if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+  // Strip codec params for matching: "audio/webm;codecs=opus" -> "audio/webm"
+  const baseType = file.mimetype.split(";")[0].trim();
+  if (ALLOWED_MIME_TYPES.has(file.mimetype) || ALLOWED_MIME_TYPES.has(baseType)) {
     cb(null, true);
   } else {
     cb(new Error(`File type not allowed: ${file.mimetype}`), false);
