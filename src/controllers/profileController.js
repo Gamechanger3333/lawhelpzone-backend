@@ -1,6 +1,6 @@
-
 import bcrypt from "bcryptjs";
 import User from "../models/User.js";
+import { getEmbedding } from "../utils/embeddingService.js";
 
 export const changePassword = async (req, res) => {
   try {
@@ -99,11 +99,14 @@ export const updateProfile = async (req, res) => {
     Object.assign(user, pick(req.body, PERSONAL_FIELDS));
 
     // Apply role-specific sub-document
-    if (user.role === "lawyer") _applyLawyerFields(user, req.body);
+    let bioChanged = false;
+    if (user.role === "lawyer") bioChanged = _applyLawyerFields(user, req.body);
     if (user.role === "client") _applyClientFields(user, req.body);
     if (user.role === "admin")  Object.assign(user, pick(req.body, ADMIN_FIELDS));
 
     await user.save({ validateBeforeSave: false });
+
+    if (bioChanged) _reembedLawyerBio(user);
 
     res.json({
       success: true,
@@ -150,9 +153,11 @@ export const updateLawyerProfile = async (req, res) => {
     if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
     Object.assign(user, pick(req.body, PERSONAL_FIELDS));
-    _applyLawyerFields(user, req.body);
+    const bioChanged = _applyLawyerFields(user, req.body);
 
     await user.save({ validateBeforeSave: false });
+
+    if (bioChanged) _reembedLawyerBio(user);
 
     res.json({
       success: true,
@@ -197,11 +202,33 @@ function _applyLawyerFields(user, body) {
   // Accept fields at the root level OR nested under lawyerProfile: {}
   const src = body.lawyerProfile || body;
   const updates = pick(src, LAWYER_SUB_FIELDS);
-  if (Object.keys(updates).length === 0) return;
+  if (Object.keys(updates).length === 0) return false;
+
+  const bioChanged = "bio" in updates && updates.bio !== user.lawyerProfile?.bio;
 
   // Merge into embedded sub-document (Mongoose needs direct assignment on mixed)
   user.lawyerProfile = { ...user.lawyerProfile.toObject?.() ?? user.lawyerProfile, ...updates };
   user.markModified("lawyerProfile");
+
+  return bioChanged;
+}
+
+// Regenerates the lawyer's bio embedding in the background — never blocks
+// or fails the profile-update response. Powers semanticSearchLawyers in
+// groqService.js (e.g. "find a lawyer experienced with custody disputes"
+// matching against free-text bios, not just the structured specializations list).
+function _reembedLawyerBio(user) {
+  const bio = user.lawyerProfile?.bio;
+  if (!bio || !bio.trim()) return;
+
+  getEmbedding(bio)
+    .then((embedding) => {
+      if (!embedding) return;
+      user.lawyerProfile.bioEmbedding = embedding;
+      user.markModified("lawyerProfile");
+      return user.save({ validateBeforeSave: false });
+    })
+    .catch((err) => console.error("Lawyer bio embedding failed:", err.message));
 }
 
 function _applyClientFields(user, body) {

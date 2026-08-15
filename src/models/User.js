@@ -24,6 +24,9 @@ const lawyerProfileSchema = new mongoose.Schema({
   website:           { type: String,   default: "" },
   linkedIn:          { type: String,   default: "" },
   bio:               { type: String,   default: "", maxlength: 1000 },
+  // Vector embedding of `bio`, used by semanticSearchLawyers in groqService.js.
+  // Regenerated whenever bio changes (see profileController.js _applyLawyerFields).
+  bioEmbedding:      { type: [Number], default: undefined },
   specializations:   { type: [String], default: [] },
   languages:         { type: [String], default: [] },
   courts:            { type: [String], default: [] },

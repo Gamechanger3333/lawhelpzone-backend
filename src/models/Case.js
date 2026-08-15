@@ -29,6 +29,11 @@ const caseSchema = new mongoose.Schema({
   deadline: { type: Date,   required: [true, "Deadline is required"] },
   urgency:  { type: String, enum: ["low", "medium", "high", "urgent"],            default: "medium" },
   status:   { type: String, enum: ["open", "in-progress", "closed", "cancelled"], default: "open" },
+  // Vector embedding of `description`, used by semanticSearchCases /
+  // getCaseFullContext in groqService.js. Not indexed in Mongo (no vector
+  // index at this scale) — read into memory and compared with cosine
+  // similarity. Regenerated whenever description changes (see caseRoutes.js).
+  embedding: { type: [Number], default: undefined, select: true },
   clientId: {
     type:     mongoose.Schema.Types.ObjectId,
     ref:      "User",

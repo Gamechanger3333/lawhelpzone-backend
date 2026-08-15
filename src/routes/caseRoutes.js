@@ -4,6 +4,7 @@ import Case    from "../models/Case.js";
 import User    from "../models/User.js";
 import { protect, restrictTo } from "../middleware/authMiddleware.js";
 import { createNotification } from "../utils/notificationService.js";
+import { getEmbedding } from "../utils/embeddingService.js";
 
 const router = express.Router();
 router.use(protect);
@@ -199,6 +200,17 @@ router.post("/", restrictTo("client","admin"), async (req, res) => {
       clientId: req.user._id, status: "open",
     });
 
+    // Embed the description in the background so case creation stays fast —
+    // this is what powers semanticSearchCases / getCaseFullContext later.
+    // If Ollama isn't running, getEmbedding resolves to null and the case
+    // simply isn't semantically searchable yet (structured search/filters
+    // still work fine) — this must never block or fail case creation.
+    getEmbedding(`${title}\n${description}`)
+      .then((embedding) => {
+        if (embedding) return Case.findByIdAndUpdate(newCase._id, { embedding });
+      })
+      .catch((err) => console.error("Case embedding generation failed:", err.message));
+
     const populated = await Case.findById(newCase._id)
       .populate("clientId", "name profileImage email").lean();
 
@@ -238,10 +250,22 @@ router.put("/:id", async (req, res) => {
     if (!c) return res.status(404).json({ success: false, message: "Case not found" });
     const isOwner = String(c.clientId) === String(req.user._id);
     if (!isOwner && req.user.role !== "admin") return res.status(403).json({ success: false, message: "Not authorized" });
+    const contentChanged = req.body.title !== undefined || req.body.description !== undefined;
     ["title","description","category","location","country","budget","deadline","urgency","status"].forEach(f => {
       if (req.body[f] !== undefined) c[f] = req.body[f];
     });
     await c.save();
+
+    // Only re-embed if the searchable content actually changed — no point
+    // burning an embedding call when someone just updates, say, the budget.
+    if (contentChanged) {
+      getEmbedding(`${c.title}\n${c.description}`)
+        .then((embedding) => {
+          if (embedding) return Case.findByIdAndUpdate(c._id, { embedding });
+        })
+        .catch((err) => console.error("Case re-embedding failed:", err.message));
+    }
+
     res.json({ success: true, case: c });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

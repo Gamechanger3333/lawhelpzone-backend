@@ -148,7 +148,13 @@ const upload = multer({
 
 app.post("/api/upload", protect, upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ message: "No file uploaded" });
-  const baseUrl = process.env.BACKEND_URL || "https://lawhelpzone-backend-production.up.railway.app";
+  // Prefer an explicit BACKEND_URL (useful behind a proxy/CDN where the
+  // request's own host header isn't the public address), but fall back to
+  // the ACTUAL request's protocol+host rather than a hardcoded production
+  // URL — a hardcoded fallback meant every local-dev upload silently
+  // produced a URL pointing at production, which the local file was never
+  // uploaded to (hence "no supported source" when played back).
+  const baseUrl = process.env.BACKEND_URL || `${req.protocol}://${req.get("host")}`;
   const url = `${baseUrl}/uploads/${req.file.filename}`;
   res.json({ success: true, url, fileUrl: url, fileName: req.file.originalname, fileSize: req.file.size });
 });

@@ -14,6 +14,7 @@
 import axios from "axios";
 import User from "../models/User.js";
 import Case from "../models/Case.js";
+import { getEmbedding, rankBySimilarity } from "./embeddingService.js";
 
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
@@ -74,6 +75,55 @@ const TOOLS = [
         properties: {
           nameOrEmail: { type: "string", description: "Client's name or email to search for" },
         },
+      },
+    },
+  },
+  // ── Semantic search tools — meaning-based, not exact-filter-based ──────────
+  // Use these when the question is about the CONTENT/MEANING of something
+  // (a described situation, a kind of experience) rather than an exact
+  // category/field match, which searchCases/searchLawyers already handle.
+  {
+    type: "function",
+    function: {
+      name: "semanticSearchCases",
+      description:
+        "Find cases whose DESCRIPTION is semantically similar to a free-text query — use this when the user describes a situation or problem in their own words (e.g. 'my landlord won't return my deposit'), rather than giving an exact category/status/location. Results are scoped to what the requester is allowed to see, same as searchCases.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "A natural-language description of the situation or case content to search for" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "semanticSearchLawyers",
+      description:
+        "Find lawyers whose BIO is semantically similar to a free-text query — use this when the user describes what kind of lawyer/experience they need in their own words (e.g. 'someone experienced with international custody disputes'), rather than giving an exact specialization keyword.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "A natural-language description of the kind of lawyer or expertise being sought" },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getCaseFullContext",
+      description:
+        "Get the full detail of ONE specific case — complete description and all lawyer proposals/messages on it — for answering a deep question about that particular case (e.g. 'what's the status of my case', 'summarize the proposals I've received'). Use searchCases first if you don't already have the case ID.",
+      parameters: {
+        type: "object",
+        properties: {
+          caseId: { type: "string", description: "The MongoDB _id of the case" },
+        },
+        required: ["caseId"],
       },
     },
   },
@@ -158,6 +208,102 @@ const toolHandlers = {
       .limit(MAX_RESULTS)
       .lean();
     return clients;
+  },
+
+  // ── Semantic search handlers ─────────────────────────────────────────────
+  semanticSearchCases: async ({ query }, requester) => {
+    if (!query) return { error: "query is required" };
+
+    const queryEmbedding = await getEmbedding(query);
+    if (!queryEmbedding) {
+      return { error: "Semantic search is temporarily unavailable. Try searchCases with specific filters instead." };
+    }
+
+    // Same scoping rules as searchCases — a client only searches their own
+    // cases, a lawyer searches open cases + ones assigned to them, admin sees all.
+    const filter = {};
+    if (requester?.role === "client") {
+      filter.clientId = requester._id;
+    } else if (requester?.role === "lawyer") {
+      filter.$or = [{ assignedLawyerId: requester._id }, { status: "open" }];
+    }
+
+    const candidates = await Case.find({ ...filter, embedding: { $exists: true, $ne: [] } })
+      .select("title category status location country embedding")
+      .limit(200) // brute-force compare a bounded candidate pool, not the entire collection
+      .lean();
+
+    const ranked = rankBySimilarity(queryEmbedding, candidates, 5);
+    return ranked.map(({ embedding, score, ...rest }) => ({ ...rest, relevance: Number(score.toFixed(2)) }));
+  },
+
+  semanticSearchLawyers: async ({ query }) => {
+    if (!query) return { error: "query is required" };
+
+    const queryEmbedding = await getEmbedding(query);
+    if (!queryEmbedding) {
+      return { error: "Semantic search is temporarily unavailable. Try searchLawyers with specific filters instead." };
+    }
+
+    const candidates = await User.find({
+      role: "lawyer",
+      "lawyerProfile.bioEmbedding": { $exists: true, $ne: [] },
+    })
+      .select("name email lawyerProfile.bio lawyerProfile.specializations lawyerProfile.jurisdiction lawyerProfile.rating lawyerProfile.bioEmbedding")
+      .limit(200)
+      .lean();
+
+    // Flatten so rankBySimilarity can find `embedding` at the top level
+    const flattened = candidates.map((c) => ({
+      name: c.name,
+      email: c.email,
+      bio: c.lawyerProfile?.bio,
+      specializations: c.lawyerProfile?.specializations,
+      jurisdiction: c.lawyerProfile?.jurisdiction,
+      rating: c.lawyerProfile?.rating,
+      embedding: c.lawyerProfile?.bioEmbedding,
+    }));
+
+    const ranked = rankBySimilarity(queryEmbedding, flattened, 5);
+    return ranked.map(({ embedding, score, ...rest }) => ({ ...rest, relevance: Number(score.toFixed(2)) }));
+  },
+
+  getCaseFullContext: async ({ caseId }, requester) => {
+    if (!caseId) return { error: "caseId is required" };
+
+    const c = await Case.findById(caseId)
+      .select("title description category status budget deadline urgency clientId assignedLawyerId proposals")
+      .populate("proposals.lawyerId", "name email")
+      .lean();
+
+    if (!c) return { error: "Case not found" };
+
+    // Enforce the same access rules as everywhere else — a client can only
+    // pull full context for their own case, a lawyer only for an open case
+    // or one assigned to them.
+    const isOwner    = requester?.role === "client" && String(c.clientId) === String(requester._id);
+    const isAssigned = requester?.role === "lawyer" && String(c.assignedLawyerId) === String(requester._id);
+    const isOpenCase = requester?.role === "lawyer" && c.status === "open";
+    const isAdmin     = requester?.role === "admin";
+
+    if (!isOwner && !isAssigned && !isOpenCase && !isAdmin) {
+      return { error: "Not authorized to view this case's full details." };
+    }
+
+    return {
+      title: c.title,
+      description: c.description,
+      category: c.category,
+      status: c.status,
+      budget: c.budget,
+      deadline: c.deadline,
+      urgency: c.urgency,
+      proposals: (c.proposals || []).map((p) => ({
+        lawyer: p.lawyerId?.name,
+        message: p.message,
+        status: p.status,
+      })),
+    };
   },
 };
 
