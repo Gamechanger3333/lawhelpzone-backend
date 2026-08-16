@@ -163,11 +163,15 @@ const toolHandlers = {
     if (status) filter.status = status;
     if (location) filter.location = { $regex: location, $options: "i" };
 
-    // Scope by role — clients/lawyers only see their own cases; admins see all
+    // Scope by role — clients/lawyers only see their own cases; admins see all.
+    // Guests (no requester — e.g. public homepage widget) only ever see
+    // "open" marketplace listings, never client-specific case data.
     if (requester?.role === "client") {
       filter.clientId = requester._id;
     } else if (requester?.role === "lawyer") {
       filter.$or = [{ assignedLawyerId: requester._id }, { status: "open" }];
+    } else if (!requester) {
+      filter.status = "open";
     }
 
     const cases = await Case.find(filter)
@@ -220,12 +224,15 @@ const toolHandlers = {
     }
 
     // Same scoping rules as searchCases — a client only searches their own
-    // cases, a lawyer searches open cases + ones assigned to them, admin sees all.
+    // cases, a lawyer searches open cases + ones assigned to them, admin
+    // sees all, and a guest (no requester) only ever sees open listings.
     const filter = {};
     if (requester?.role === "client") {
       filter.clientId = requester._id;
     } else if (requester?.role === "lawyer") {
       filter.$or = [{ assignedLawyerId: requester._id }, { status: "open" }];
+    } else if (!requester) {
+      filter.status = "open";
     }
 
     const candidates = await Case.find({ ...filter, embedding: { $exists: true, $ne: [] } })
@@ -308,6 +315,130 @@ const toolHandlers = {
 };
 
 // ── Tool-calling wrapper around Groq ───────────────────────────────────────
+// ── Self-healing for pseudo tool-calls ───────────────────────────────────────
+// Some Llama models, even with real tool-calling available, occasionally
+// write out a tool "call" as plain text instead of using the structured
+// tool_calls API field — e.g. `<function=searchLawyers>{"query":"..."}</function>`
+// embedded in the reply itself. Left as-is, the user sees broken pseudo-code.
+// Worse, the model sometimes invents a tool name that doesn't exist at all
+// (e.g. "getActiveCases" — not a real tool here) — pure hallucination.
+//
+// This function detects that pattern and recovers:
+//   - If the referenced tool is REAL: actually execute it (the model clearly
+//     intended to call it) and re-ask for a final answer using the result —
+//     same flow as a normal tool call, just recovered from the wrong format.
+//   - If the tool is HALLUCINATED (not in toolHandlers): give the model one
+//     corrective retry with an explicit reminder of the exact valid tool
+//     names, rather than showing the user broken syntax or invented data.
+//
+// Returns the healed final text, or null if no pseudo-call pattern was found
+// (meaning the caller should just use the original content as-is).
+const PSEUDO_CALL_PATTERN = /<function=(\w+)>(\{[\s\S]*?\})<\/function>/g;
+
+async function healPseudoToolCalls(content, model, messages, requester) {
+  const matches = [...content.matchAll(PSEUDO_CALL_PATTERN)];
+  if (matches.length === 0) return null;
+
+  const apiKey = process.env.GROQ_API_KEY;
+  const realCalls = [];
+  const hallucinatedNames = [];
+
+  for (const [, fnName, argsJson] of matches) {
+    if (toolHandlers[fnName]) {
+      realCalls.push({ fnName, argsJson });
+    } else {
+      hallucinatedNames.push(fnName);
+    }
+  }
+
+  if (realCalls.length > 0) {
+    // Recover: actually execute the real tool(s) the model clearly meant to call.
+    const toolResults = [];
+    for (const { fnName, argsJson } of realCalls) {
+      let result;
+      try {
+        const args = JSON.parse(argsJson);
+        result = await toolHandlers[fnName](args, requester);
+      } catch (e) {
+        result = { error: e.message };
+      }
+      toolResults.push(`${fnName} result: ${JSON.stringify(result)}`);
+    }
+
+    const healedMessages = [
+      ...messages,
+      {
+        role: "user",
+        content: `[System note: your previous response tried to call a tool using invalid syntax. Here are the actual results — please give a natural, well-formatted answer using this data, with no code or tags:]\n${toolResults.join("\n")}`,
+      },
+    ];
+
+    const followUp = await axios.post(
+      GROQ_API_URL,
+      { model, messages: healedMessages, max_tokens: 500, temperature: 0.3 },
+      { headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, timeout: 30000 }
+    );
+    const finalText = followUp.data?.choices?.[0]?.message?.content;
+    if (finalText) return finalText.trim();
+    return null;
+  }
+
+  if (hallucinatedNames.length > 0) {
+    // The model invented a tool that doesn't exist — give it one corrective
+    // retry with an explicit list of real tool names, instead of showing
+    // the user broken syntax or inventing an answer around a fake tool.
+    const validNames = TOOLS.map((t) => t.function.name).join(", ");
+    const healedMessages = [
+      ...messages,
+      {
+        role: "user",
+        content: `[System note: "${hallucinatedNames.join(", ")}" is not a real tool. The only available tools are: ${validNames}. Please either call one of those using proper function calling, or answer directly without inventing a tool.]`,
+      },
+    ];
+
+    const followUp = await axios.post(
+      GROQ_API_URL,
+      { model, messages: healedMessages, tools: TOOLS, tool_choice: "auto", max_tokens: 500, temperature: 0.3 },
+      { headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, timeout: 30000 }
+    );
+    const followMsg = followUp.data?.choices?.[0]?.message;
+
+    // The retry might STILL not use real tool_calls — recurse once through
+    // the same healer in case it repeats the pseudo-syntax mistake, but the
+    // recursion naturally terminates because this branch only fires when
+    // hallucinatedNames.length > 0, and we don't loop indefinitely (see cap below).
+    if (followMsg?.tool_calls?.length) {
+      const toolResults = [];
+      for (const call of followMsg.tool_calls) {
+        const fnName = call.function?.name;
+        let result;
+        try {
+          const args = JSON.parse(call.function?.arguments || "{}");
+          result = toolHandlers[fnName] ? await toolHandlers[fnName](args, requester) : { error: "Unknown tool" };
+        } catch (e) {
+          result = { error: e.message };
+        }
+        toolResults.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+      }
+      const finalFollowUp = await axios.post(
+        GROQ_API_URL,
+        { model, messages: [...healedMessages, followMsg, ...toolResults], max_tokens: 500, temperature: 0.3 },
+        { headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` }, timeout: 30000 }
+      );
+      return finalFollowUp.data?.choices?.[0]?.message?.content?.trim() || null;
+    }
+
+    if (followMsg?.content) {
+      // Strip any lingering pseudo-syntax so the user never sees raw tags,
+      // even if the model still didn't fully self-correct.
+      return followMsg.content.replace(PSEUDO_CALL_PATTERN, "").trim();
+    }
+    return null;
+  }
+
+  return null;
+}
+
 const callGroqWithTools = async (systemPrompt, userPrompt, requester = null, retries = 2) => {
   const apiKey = process.env.GROQ_API_KEY;
 
@@ -383,7 +514,11 @@ const callGroqWithTools = async (systemPrompt, userPrompt, requester = null, ret
           throw new Error("Empty response from Groq after tool call");
         }
 
-        if (msg?.content) return msg.content.trim();
+        if (msg?.content) {
+          const healed = await healPseudoToolCalls(msg.content, model, messages, requester);
+          if (healed !== null) return healed;
+          return msg.content.trim();
+        }
         throw new Error("Empty response from Groq");
 
       } catch (err) {
@@ -530,6 +665,7 @@ RULES:
 - Be professional and empathetic.
 - Use platform data when provided to answer data questions accurately.
 - You have tools to search lawyers, cases, and lawyer profiles on the platform. You MUST call the relevant tool whenever the user asks to find/list/search lawyers, cases, pricing, or specializations — NEVER invent names, lawyers, or data from memory. If a tool returns no results or an error, say so honestly instead of making something up.
+${requester ? "" : "- This user is NOT logged in (a guest). You can still help them find lawyers and understand general legal topics, but you cannot access or discuss any personal case data. If they ask about 'my case' or similar, gently let them know they'll need to sign up / log in for that."}
 ${contextBlock}`;
 
   const user = historyText
