@@ -337,7 +337,9 @@ const PSEUDO_CALL_PATTERN = /<function=(\w+)>(\{[\s\S]*?\})<\/function>/g;
 
 async function healPseudoToolCalls(content, model, messages, requester) {
   const matches = [...content.matchAll(PSEUDO_CALL_PATTERN)];
+  console.log(`[healPseudoToolCalls] checked content, pseudo-call matches found: ${matches.length}`);
   if (matches.length === 0) return null;
+  console.log(`[healPseudoToolCalls] detected pseudo-calls:`, matches.map(m => m[1]));
 
   const apiKey = process.env.GROQ_API_KEY;
   const realCalls = [];
