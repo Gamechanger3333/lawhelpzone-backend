@@ -218,7 +218,7 @@ router.post("/", restrictTo("client","admin"), async (req, res) => {
     try {
       const lawyers = await User.find({ role: "lawyer" }).select("_id").lean();
       await Promise.all(lawyers.slice(0, 50).map(l =>
-        createNotification({ userId: l._id, title: `New Case: ${title}`, body: description.slice(0,100), type: "case", meta: { caseId: newCase._id } })
+        createNotification({ userId: l._id, title: `New Case: ${title}`, body: description.slice(0,100), type: "case_update", meta: { caseId: newCase._id } })
       ));
     } catch {}
 
@@ -301,7 +301,7 @@ router.post("/:id/proposals", restrictTo("lawyer"), async (req, res) => {
 
     // Notify client
     try {
-      await createNotification({ userId: c.clientId, title: `New Proposal from ${req.user.name}`, body: `A lawyer submitted a proposal on your case: ${c.title}`, type: "case", meta: { caseId: c._id, lawyerId: req.user._id } });
+      await createNotification({ userId: c.clientId, title: `New Proposal from ${req.user.name}`, body: `A lawyer submitted a proposal on your case: ${c.title}`, type: "new_proposal", meta: { caseId: c._id, lawyerId: req.user._id } });
     } catch {}
 
     res.json({ success: true, case: c });
@@ -324,7 +324,7 @@ router.post("/:id/accept", restrictTo("client"), async (req, res) => {
     await c.save();
 
     try {
-      await createNotification({ userId: lawyerId, title: "Proposal Accepted!", body: `Your proposal on "${c.title}" was accepted. You can now contact the client.`, type: "success", meta: { caseId: c._id } });
+      await createNotification({ userId: lawyerId, title: "Proposal Accepted!", body: `Your proposal on "${c.title}" was accepted. You can now contact the client.`, type: "proposal_accepted", meta: { caseId: c._id } });
     } catch {}
 
     res.json({ success: true, case: c });
@@ -345,8 +345,8 @@ router.post("/:id/assign", restrictTo("admin"), async (req, res) => {
 
     try {
       await Promise.all([
-        createNotification({ userId: lawyerId,  title: "Case Assigned", body: `Admin assigned you to: ${c.title}`, type: "case", meta: { caseId: c._id } }),
-        createNotification({ userId: c.clientId,title: "Lawyer Assigned", body: `A lawyer has been assigned to your case: ${c.title}`, type: "success", meta: { caseId: c._id } }),
+        createNotification({ userId: lawyerId,  title: "Case Assigned", body: `Admin assigned you to: ${c.title}`, type: "case_update", meta: { caseId: c._id } }),
+        createNotification({ userId: c.clientId,title: "Lawyer Assigned", body: `A lawyer has been assigned to your case: ${c.title}`, type: "case_update", meta: { caseId: c._id } }),
       ]);
     } catch {}
 
