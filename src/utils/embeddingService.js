@@ -12,11 +12,13 @@
 //     is different, but the underlying embedding + similarity math is the
 //     same technique.
 
-// In production, Ollama runs on a separate server (e.g. a free Oracle Cloud
-// VM), not on the same machine as this backend — so the URL must be
-// configurable. Defaults to localhost for local development.
-const OLLAMA_EMBED_URL = `${process.env.OLLAMA_URL || "http://localhost:11434"}/api/embed`;
-const EMBED_MODEL = "nomic-embed-text";
+// Uses Google's Gemini embedding API (gemini-embedding-001) — free tier,
+// no separate server to host or maintain (unlike Ollama, which needed its
+// own always-on machine). Reuses the same GEMINI_API_KEY already configured
+// for the AI chat assistant.
+const GEMINI_EMBED_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent";
+const EMBED_MODEL = "gemini-embedding-001";
+const EMBED_DIM = 768; // Matryoshka-truncated from the model's native 3072 dims — plenty for this project's scale, smaller to store/compare.
 
 // Text -> vector. Used both when indexing (case/lawyer saved) and when
 // answering a question (the user's query also needs to become a vector
@@ -24,23 +26,36 @@ const EMBED_MODEL = "nomic-embed-text";
 export async function getEmbedding(text) {
   if (!text || !text.trim()) return null;
 
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.error("Embedding generation skipped: GEMINI_API_KEY is not set.");
+    return null;
+  }
+
   try {
-    const response = await fetch(OLLAMA_EMBED_URL, {
+    const response = await fetch(GEMINI_EMBED_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: EMBED_MODEL, input: [text] }),
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
+      body: JSON.stringify({
+        model: `models/${EMBED_MODEL}`,
+        content: { parts: [{ text }] },
+        outputDimensionality: EMBED_DIM,
+      }),
     });
     if (!response.ok) {
       console.error(`Embedding request failed: ${response.status}`);
       return null;
     }
     const data = await response.json();
-    return data.embeddings?.[0] || null;
+    return data.embedding?.values || data.embeddings?.[0]?.values || null;
   } catch (err) {
-    // Ollama not running, network issue, etc. Embedding is an enhancement —
+    // Network issue, quota exceeded, etc. Embedding is an enhancement —
     // callers should treat a null return as "semantic search unavailable
     // for this item right now", not crash the case-save/profile-update flow.
-    console.error("Embedding generation failed (is Ollama running?):", err.message);
+    console.error("Embedding generation failed:", err.message);
     return null;
   }
 }

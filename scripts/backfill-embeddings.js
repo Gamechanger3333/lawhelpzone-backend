@@ -18,7 +18,7 @@ import { getEmbedding } from '../src/utils/embeddingService.js';
 
 dotenv.config();
 
-const BATCH_DELAY_MS = 50; // small pause between items — be gentle on local Ollama
+const BATCH_DELAY_MS = 50; // small pause between items — be gentle on the Gemini free-tier quota
 
 async function backfillCases() {
   const cases = await Case.find({
