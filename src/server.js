@@ -35,6 +35,13 @@ connectDB();
 
 const app = express();
 
+// Render (and most PaaS hosts) sit behind a reverse proxy that sets
+// X-Forwarded-For. Without telling Express to trust exactly one hop of
+// proxy, express-rate-limit refuses to trust that header (ERR_ERL_UNEXPECTED_
+// X_FORWARDED_FOR) and every IP-keyed rate limiter — including the new
+// guest chat limiter — throws instead of working.
+app.set("trust proxy", 1);
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
