@@ -12,7 +12,10 @@
 //     is different, but the underlying embedding + similarity math is the
 //     same technique.
 
-const OLLAMA_EMBED_URL = "http://localhost:11434/api/embed";
+// In production, Ollama runs on a separate server (e.g. a free Oracle Cloud
+// VM), not on the same machine as this backend — so the URL must be
+// configurable. Defaults to localhost for local development.
+const OLLAMA_EMBED_URL = `${process.env.OLLAMA_URL || "http://localhost:11434"}/api/embed`;
 const EMBED_MODEL = "nomic-embed-text";
 
 // Text -> vector. Used both when indexing (case/lawyer saved) and when

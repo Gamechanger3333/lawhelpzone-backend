@@ -8,8 +8,8 @@
 //   - Sign up: https://console.groq.com
 //
 // Models used (all free):
-//   Primary:  llama-3.1-8b-instant   — fast, low token cost, high RPM
-//   Fallback: llama3-70b-8192        — smarter, for complex tasks
+//   Primary:  openai/gpt-oss-20b   — fast, low token cost, high RPM
+//   Fallback: openai/gpt-oss-120b        — smarter, for complex tasks
 
 import axios from "axios";
 import User from "../models/User.js";
@@ -554,16 +554,16 @@ const callGroqWithTools = async (systemPrompt, userPrompt, requester = null, ret
 
 // Primary model first (cheapest on TPM), smarter model as fallback
 const MODELS = [
-  "llama-3.1-8b-instant",   // 30 RPM, 14400 RPD — workhorse
-  "llama3-70b-8192",        // 30 RPM, 14400 RPD — fallback if 8b fails
+  "openai/gpt-oss-20b",   // 30 RPM, 14400 RPD — workhorse
+  "openai/gpt-oss-120b",        // 30 RPM, 14400 RPD — fallback if 8b fails
 ];
 
 // Tool-calling needs a model that reliably honors function-call requests.
-// llama-3.1-8b-instant often skips tools and hallucinates instead — use
+// openai/gpt-oss-20b often skips tools and hallucinates instead — use
 // larger models first for any request that may need DB lookups.
 const TOOL_MODELS = [
-  "llama-3.3-70b-versatile",
-  "llama3-70b-8192",
+  "openai/gpt-oss-120b",
+  "qwen/qwen3.6-27b",
 ];
 
 // ── Core Groq caller ──────────────────────────────────────────────────────────
@@ -667,6 +667,7 @@ RULES:
 - Be professional and empathetic.
 - Use platform data when provided to answer data questions accurately.
 - You have tools to search lawyers, cases, and lawyer profiles on the platform. You MUST call the relevant tool whenever the user asks to find/list/search lawyers, cases, pricing, or specializations — NEVER invent names, lawyers, or data from memory. If a tool returns no results or an error, say so honestly instead of making something up.
+- IMPORTANT: Always reply in the SAME language/script the user just wrote in. If they write in Roman Urdu (Urdu written in English letters, e.g. "mujhe lawyer chahiye"), reply in Roman Urdu too — not English, not Urdu script (نستعلیق). If they write in English, reply in English. If they mix languages, match their mix. Never switch language on your own.
 ${requester ? "" : "- This user is NOT logged in (a guest). You can still help them find lawyers and understand general legal topics, but you cannot access or discuss any personal case data. If they ask about 'my case' or similar, gently let them know they'll need to sign up / log in for that."}
 ${contextBlock}`;
 
@@ -695,7 +696,8 @@ LIVE PLATFORM DATA:
 - In-Progress Cases: ${platformContext.inProgressCases ?? "N/A"}
 - Cases This Month: ${platformContext.thisMonthCases ?? "N/A"}
 
-YOUR ROLE: Answer questions about stats, analyse trends, suggest improvements. You have admin-level tools to search/list lawyers, clients, and cases across the entire platform (no scoping restrictions) — you MUST call the relevant tool whenever asked to find, list, or look up lawyers, clients, or cases. NEVER invent names or data from memory; if a tool returns no results or an error, say so honestly. Be direct and data-driven. Keep responses under 300 words.`;
+YOUR ROLE: Answer questions about stats, analyse trends, suggest improvements. You have admin-level tools to search/list lawyers, clients, and cases across the entire platform (no scoping restrictions) — you MUST call the relevant tool whenever asked to find, list, or look up lawyers, clients, or cases. NEVER invent names or data from memory; if a tool returns no results or an error, say so honestly. Be direct and data-driven. Keep responses under 300 words.
+Always reply in the SAME language/script the admin just wrote in (English, Roman Urdu, etc.) — never switch on your own.`;
 
   const user = historyText
     ? `Previous conversation:\n${historyText}\n\nAdmin: ${userMessage}`
