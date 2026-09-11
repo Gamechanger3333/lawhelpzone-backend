@@ -5,9 +5,10 @@
 import express from "express";
 import { protect }        from "../middleware/authMiddleware.js";
 import { restrictTo }     from "../middleware/authMiddleware.js";
-import { aiLimiter, chatAiLimiter } from "../middleware/aiRateLimit.js";
+import { aiLimiter, chatAiLimiter, guestChatLimiter } from "../middleware/aiRateLimit.js";
 import {
   legalChat,
+  publicChat,
   adminChat,
   classifyCaseHandler,
   analyzeDocumentHandler,
@@ -17,7 +18,13 @@ import {
 
 const router = express.Router();
 
-// All AI routes require authentication
+// ── POST /api/ai/public-chat ───────────────────────────────────────────────────
+// Unauthenticated — must be registered BEFORE router.use(protect) below.
+// Used by the floating chat widget on public/marketing pages for
+// logged-out visitors.
+router.post("/public-chat", guestChatLimiter, publicChat);
+
+// All AI routes below require authentication
 router.use(protect);
 
 // ── POST /api/ai/chat ─────────────────────────────────────────────────────────

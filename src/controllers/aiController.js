@@ -143,6 +143,37 @@ export const legalChat = async (req, res) => {
   }
 };
 
+// ── POST /api/ai/public-chat ───────────────────────────────────────────────────
+// Same assistant as legalChat, but for logged-out site visitors. No req.user,
+// no platform/case context, shorter message cap, and a much stricter rate
+// limit (see guestChatLimiter) — getLegalAssistantReply already knows how to
+// answer a null `requester` (guest) by nudging them to sign up for anything
+// account-specific.
+export const publicChat = async (req, res) => {
+  try {
+    const { message, history = [] } = req.body;
+
+    if (!message?.trim()) {
+      return res.status(400).json({ success: false, message: "Message is required" });
+    }
+    if (message.length > 500) {
+      return res.status(400).json({ success: false, message: "Message too long (max 500 characters)" });
+    }
+
+    const trimmedHistory = Array.isArray(history) ? history.slice(-6) : [];
+    const reply = await getLegalAssistantReply(message.trim(), trimmedHistory, null, null);
+
+    return res.json({
+      success: true,
+      reply,
+      disclaimer: "AI provides informational assistance only and does not constitute legal advice. Sign up to save your chat and get help with your specific case.",
+    });
+  } catch (err) {
+    console.error("Public AI chat error:", err.message);
+    return res.status(500).json({ success: false, message: aiErrorMessage(err) });
+  }
+};
+
 // ── POST /api/ai/admin-chat ───────────────────────────────────────────────────
 export const adminChat = async (req, res) => {
   try {

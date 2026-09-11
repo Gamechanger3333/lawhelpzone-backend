@@ -35,3 +35,22 @@ export const chatAiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders:   false,
 });
+
+// ── Guest chat limiter: /api/ai/public-chat
+// No logged-in user to key off, so this is IP-based and stricter than the
+// authenticated chat limiter — anonymous traffic has no accountability and
+// the same shared Gemini free-tier quota, so it needs a tighter cap to stop
+// a single visitor (or a bot) from burning the whole platform's quota.
+export const guestChatLimiter = rateLimit({
+  windowMs:        5 * 60 * 1000, // 5 minute window
+  max:             3,              // 3 messages per IP per 5 min
+  keyGenerator:    (req) => ipKeyGenerator(req),
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      message: "You've reached the guest chat limit. Please sign up or log in to continue chatting.",
+    });
+  },
+  standardHeaders: true,
+  legacyHeaders:   false,
+});
