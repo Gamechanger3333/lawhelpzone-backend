@@ -136,6 +136,18 @@ function futureDate(daysFromNow) {
   return d;
 }
 
+// Lightweight bootstrap — creates the demo user + companion lawyers if they
+// don't exist yet, but never touches case/message/notification data. Meant
+// to run once at server startup so the demo account exists even before
+// anyone has ever logged in (resetDemoData() below only runs *after* a
+// successful login, so without this, a fresh database can never produce
+// that first successful login — the demo account would be permanently
+// unreachable).
+export async function ensureDemoUserExists() {
+  await findOrCreateDemoUser();
+  await findOrCreateDemoLawyers();
+}
+
 export async function resetDemoData() {
   const demoUser = await findOrCreateDemoUser();
   const demoLawyers = await findOrCreateDemoLawyers();

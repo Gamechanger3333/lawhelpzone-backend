@@ -10,6 +10,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import multer from "multer";
 import connectDB from "./config/database.js";
+import { ensureDemoUserExists } from "../scripts/seedDemoData.js";
 
 import authRoutes         from "./routes/authRoutes.js";
 import caseRoutes         from "./routes/caseRoutes.js";
@@ -31,7 +32,13 @@ import { securityMiddleware } from "./middleware/security.js";
 import { apiLimiter }         from "./middleware/rateLimiter.js";
 
 dotenv.config();
-connectDB();
+connectDB().then(() => {
+  // Bootstrap the demo account once the DB connection is ready. Safe to run
+  // on every boot — it's a no-op once the demo user already exists.
+  ensureDemoUserExists().catch((err) =>
+    console.error("Demo user bootstrap failed (non-fatal):", err.message)
+  );
+});
 
 const app = express();
 
