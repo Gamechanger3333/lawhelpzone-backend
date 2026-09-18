@@ -118,6 +118,18 @@ router.post("/stripe/dashboard-link", protect, async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/create-checkout-session", protect, async (req, res) => {
   try {
+    // Demo Mode: never let the public demo account move real money —
+    // this is independent of the demo-data reset strategy above, since a
+    // reset can wipe fake cases/messages but can never undo a real Stripe
+    // charge. Blocked unconditionally rather than relying on Stripe test
+    // keys alone, in case production keys are ever configured.
+    if (req.user?.email === (process.env.DEMO_EMAIL || "demo@lawhelpzone.com")) {
+      return res.status(403).json({
+        success: false,
+        message: "Demo Mode: payments are disabled for the demo account. Sign up for a free account to test payments.",
+      });
+    }
+
     const { lawyerId, amount, serviceName = "Legal Service", caseId } = req.body;
 
     if (!lawyerId || !amount || amount < 50) {

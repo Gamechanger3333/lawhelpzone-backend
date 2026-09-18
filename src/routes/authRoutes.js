@@ -2,6 +2,7 @@
 import express from "express";
 import crypto from "crypto";
 import User from "../models/User.js";
+import { resetDemoData } from "../../scripts/seedDemoData.js";
 import {
   createJWT,
   createRefreshToken,
@@ -189,6 +190,20 @@ router.post("/login", authLimiter, validateSignin, async (req, res) => {
     });
     if (user.loginHistory.length > 10) {
       user.loginHistory = user.loginHistory.slice(-10);
+    }
+
+    // Reset demo account to a clean, realistic state on every login — see
+    // scripts/seedDemoData.js for why login-time reset (not a scheduled job)
+    // was chosen for this deployment. Scoped strictly to the demo email; a
+    // real user's login is completely unaffected by this check.
+    if (user.email === (process.env.DEMO_EMAIL || "demo@lawhelpzone.com")) {
+      try {
+        await resetDemoData();
+      } catch (err) {
+        // Never block demo login over a reset failure — stale demo data is
+        // a much smaller problem than the demo being inaccessible.
+        console.error("Demo data reset failed (non-fatal):", err.message);
+      }
     }
 
     // Generate & store tokens

@@ -18,6 +18,22 @@ Built with Node.js, Express, MongoDB, Stripe Connect, and Socket.io.
 
 ---
 
+## 🎬 Demo Access
+
+Want to explore LawHelpZone without signing up? Use the **"Try Demo Account"** button on the login page, or log in manually with:
+
+```
+Email:    demo@lawhelpzone.com
+Password: Demo@1234
+```
+
+**Notes:**
+- Demo data (cases, messages, proposals) automatically resets to a clean, realistic state every time the demo account logs in — so it's always safe to explore and never gets messy from other visitors.
+- Real payments are disabled for this account — everything else (browsing lawyers, creating cases, messaging, AI assistant) works normally.
+- A real signup is also available if you'd like to test the full flow, including email verification.
+
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
